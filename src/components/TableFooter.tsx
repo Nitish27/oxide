@@ -12,6 +12,8 @@ interface TableFooterProps {
   executionTime?: number;
   onToggleFilters?: () => void;
   isFiltersVisible?: boolean;
+  onToggleColumns?: () => void;
+  isColumnsVisible?: boolean;
 }
 
 export const TableFooter = ({
@@ -24,7 +26,9 @@ export const TableFooter = ({
   onPageChange,
   executionTime,
   onToggleFilters,
-  isFiltersVisible
+  isFiltersVisible,
+  onToggleColumns,
+  isColumnsVisible
 }: TableFooterProps) => {
   const start = totalRows > 0 ? offset + 1 : 0;
   const end = Math.min(offset + pageSize, totalRows);
@@ -75,8 +79,14 @@ export const TableFooter = ({
         </div>
 
         <div className="flex items-center border border-[#444444] rounded bg-[#3C3C3C] h-6">
-           <button className="px-3 h-full border-r border-[#444444] hover:bg-[#454545] text-[#cccccc] flex items-center gap-1">
-             <Columns size={12} className="text-[#999999]" />
+           <button 
+             onClick={onToggleColumns}
+             className={cn(
+               "px-3 h-full border-r border-[#444444] hover:bg-[#454545] text-[#cccccc] flex items-center gap-1 transition-colors",
+               isColumnsVisible && "bg-[#555555] text-white"
+             )}
+           >
+             <Columns size={12} className={cn("text-[#999999]", isColumnsVisible && "text-white")} />
              <span>Columns</span>
            </button>
            <button 

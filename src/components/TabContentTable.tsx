@@ -3,9 +3,11 @@ import { invoke } from '@tauri-apps/api/core';
 import { DataTable } from './DataTable';
 import { PendingChanges } from './PendingChanges';
 import { useTableMutations } from '../hooks/useTableMutations';
-import { useDatabaseStore } from '../store/databaseStore';
+import { useDatabaseStore, SortConfig } from '../store/databaseStore';
 import { TableFooter } from './TableFooter';
 import { FilterBar } from './FilterBar';
+import { ColumnVisibilityPopover } from './ColumnVisibilityPopover';
+import { TabContentStructure } from './TabContentStructure';
 
 interface TabContentTableProps {
   tableName: string;
@@ -13,13 +15,25 @@ interface TabContentTableProps {
 }
 
 export const TabContentTable = ({ tableName, connectionId }: TabContentTableProps) => {
-  const { refreshTrigger, triggerRefresh, tabs, activeTabId, setSelectedRow, updateTab, toggleFilterBar } = useDatabaseStore();
+  const { 
+    refreshTrigger, 
+    triggerRefresh, 
+    tabs, 
+    activeTabId, 
+    setSelectedRow, 
+    updateTab, 
+    toggleFilterBar,
+    setSortConfig,
+    toggleColumnsPopover,
+    setViewMode
+  } = useDatabaseStore();
   const activeTab = tabs.find(t => t.id === activeTabId);
   const [tableData, setTableData] = useState<any[][]>([]);
   const [tableColumns, setTableColumns] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const mutations = useTableMutations();
   const [executionTime, setExecutionTime] = useState<number | undefined>();
+  const viewMode = activeTab?.viewMode || 'data';
 
   useEffect(() => {
     const fetchData = async () => {
@@ -28,6 +42,7 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
             const limit = activeTab?.pageSize || 100;
             const offset = activeTab?.offset || 0;
             const filters = activeTab?.filters?.filter(f => f.enabled) || [];
+            const sortConfig = activeTab?.sortConfig;
 
             const [result, count] = await Promise.all([
               invoke<any>('get_table_data', { 
@@ -35,7 +50,9 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
                   tableName,
                   limit,
                   offset,
-                  filters
+                  filters,
+                  sortColumn: sortConfig?.column,
+                  sortDirection: sortConfig?.direction
               }),
               invoke<number>('get_table_count', {
                   connectionId,
@@ -69,7 +86,7 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
     };
 
     fetchData();
-  }, [connectionId, tableName, refreshTrigger, activeTab?.offset, activeTab?.pageSize]); 
+  }, [connectionId, tableName, refreshTrigger, activeTab?.offset, activeTab?.pageSize, activeTab?.sortConfig]); 
   // Note: activeTab?.filters is implicitly covered by refreshTrigger when user clicks "Apply"
 
   const handleCommit = async (statements: string[]) => {
@@ -97,6 +114,27 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
     }
   };
 
+  const handleSort = (column: string) => {
+    if (!activeTabId) return;
+    const currentSort = activeTab?.sortConfig;
+    
+    let newConfig: SortConfig;
+    if (currentSort?.column === column) {
+      // Toggle direction or clear
+      if (currentSort.direction === 'ASC') {
+        newConfig = { column, direction: 'DESC' };
+      } else {
+        // Clear sort after DESC
+        setSortConfig(activeTabId, { column: null, direction: 'ASC' });
+        return;
+      }
+    } else {
+      // New column, start with ASC
+      newConfig = { column, direction: 'ASC' };
+    }
+    setSortConfig(activeTabId, newConfig);
+  };
+
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-background overflow-hidden relative">
       <div className="flex-1 overflow-hidden flex flex-col">
@@ -107,30 +145,53 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
                 filters={activeTab.filters || []}
             />
         )}
-
-        <div className="flex-1 overflow-hidden relative">
-            {loading ? (
-            <div className="flex items-center justify-center h-full text-text-muted">Loading data...</div>
-            ) : (
-            <DataTable 
-                columns={tableColumns} 
-                data={tableData} 
-                mutations={mutations}
-                selectedRowIndex={activeTab?.selectedRowIndex}
-                onRowClick={(index) => {
-                if (activeTabId) {
-                    setSelectedRow(activeTabId, index);
-                }
-                }}
-            />
-            )}
-        </div>
+        
+        {viewMode === 'data' ? (
+          <div className="flex-1 overflow-hidden relative">
+              {loading ? (
+              <div className="flex items-center justify-center h-full text-text-muted">Loading data...</div>
+              ) : (
+              <DataTable 
+                  columns={tableColumns} 
+                  data={tableData} 
+                  mutations={mutations}
+                  selectedRowIndex={activeTab?.selectedRowIndex}
+                  onRowClick={(index) => {
+                  if (activeTabId) {
+                      setSelectedRow(activeTabId, index);
+                  }
+                  }}
+                  sortConfig={activeTab?.sortConfig}
+                  onSort={handleSort}
+                  hiddenColumns={activeTab?.hiddenColumns}
+              />
+              )}
+          </div>
+        ) : (
+          <TabContentStructure 
+            tableName={tableName} 
+            connectionId={connectionId} 
+            tabId={activeTabId || ''} 
+          />
+        )}
       </div>
 
+      {/* Column Visibility Popover */}
+      {activeTab?.isColumnsPopoverVisible && activeTabId && (
+        <div className="absolute bottom-12 right-2 z-[60]">
+          <ColumnVisibilityPopover
+            tabId={activeTabId}
+            columns={tableColumns}
+            hiddenColumns={activeTab.hiddenColumns || []}
+            onClose={() => toggleColumnsPopover(activeTabId)}
+          />
+        </div>
+      )}
+
       <TableFooter 
-        type="Data"
-        onTypeChange={() => {}}
-        onAddRow={() => {}}
+        type={viewMode === 'structure' ? 'Structure' : 'Data'}
+        onTypeChange={(type) => activeTabId && setViewMode(activeTabId, type === 'Structure' ? 'structure' : 'data')}
+        onAddRow={viewMode === 'data' ? () => {} : undefined}
         offset={activeTab?.offset || 0}
         pageSize={activeTab?.pageSize || 100}
         totalRows={activeTab?.totalRows || 0}
@@ -138,6 +199,8 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
         executionTime={executionTime}
         onToggleFilters={() => activeTabId && toggleFilterBar(activeTabId)}
         isFiltersVisible={activeTab?.isFilterVisible}
+        onToggleColumns={() => activeTabId && toggleColumnsPopover(activeTabId)}
+        isColumnsVisible={activeTab?.isColumnsPopoverVisible}
       />
 
       {/* Bottom Console / Pending Changes */}

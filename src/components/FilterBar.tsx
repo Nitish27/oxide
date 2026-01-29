@@ -1,4 +1,4 @@
-import { Plus } from 'lucide-react';
+import { Plus, Filter } from 'lucide-react';
 import { useDatabaseStore, FilterConfig } from '../store/databaseStore';
 import { FilterRow } from './FilterRow';
 import { v4 as uuidv4 } from 'uuid';
@@ -31,25 +31,39 @@ export const FilterBar = ({ tabId, columns, filters }: FilterBarProps) => {
     triggerRefresh();
   };
 
+  const enabledFiltersCount = filters.filter(f => f.enabled).length;
+
   if (filters.length === 0) {
     return (
-      <div className="bg-[#2C2C2C] border-b border-[#1e1e1e] p-2 flex items-center justify-between text-xs">
-         <span className="text-[#999]">No filters applied</span>
-         <button 
-           onClick={handleAddFilter}
-           className="flex items-center gap-1 px-2 py-1 bg-[#3C3C3C] hover:bg-[#454545] rounded text-white"
-         >
-           <Plus size={12} />
-           Add Filter
-         </button>
+      <div className="bg-[#252526] border-b border-[#1a1a1a] px-3 py-2.5 flex items-center justify-between">
+        <div className="flex items-center gap-2 text-xs text-[#888]">
+          <Filter size={14} className="text-[#666]" />
+          <span>No filters applied</span>
+        </div>
+        <button 
+          onClick={handleAddFilter}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-[#007acc] hover:bg-[#0069b3] rounded-md text-white text-xs font-medium transition-colors shadow-sm"
+        >
+          <Plus size={12} />
+          Add Filter
+        </button>
       </div>
     );
   }
 
   return (
-    <div className="bg-[#2C2C2C] border-b border-[#1e1e1e] p-2 flex flex-col gap-1">
+    <div className="bg-[#252526] border-b border-[#1a1a1a] px-3 py-2.5">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2 text-xs text-[#888]">
+          <Filter size={14} className="text-[#007acc]" />
+          <span className="text-[#ccc]">{enabledFiltersCount} active filter{enabledFiltersCount !== 1 ? 's' : ''}</span>
+        </div>
+      </div>
+
+      {/* Filter rows */}
       <div className="flex flex-col">
-        {filters.map((filter, index) => (
+        {filters.map((filter) => (
           <FilterRow
             key={filter.id}
             filter={filter}
@@ -57,24 +71,24 @@ export const FilterBar = ({ tabId, columns, filters }: FilterBarProps) => {
             onUpdate={(updates) => updateFilter(tabId, filter.id, updates)}
             onRemove={() => removeFilter(tabId, filter.id)}
             onAdd={handleAddFilter}
-            isLast={index === filters.length - 1}
             canRemove={true}
           />
         ))}
       </div>
       
-      <div className="flex items-center justify-end gap-2 mt-1 pt-1 border-t border-[#333]">
+      {/* Action buttons */}
+      <div className="flex items-center justify-end gap-2 mt-2 pt-2 border-t border-[#333]">
         <button 
           onClick={handleUnset}
-          className="px-3 py-1 text-[#999] hover:text-white hover:bg-[#3C3C3C] rounded transition-colors text-xs"
+          className="px-4 py-1.5 text-[#888] hover:text-white hover:bg-[#3a3a3a] rounded-md transition-colors text-xs font-medium"
         >
-          Unset
+          Clear All
         </button>
         <button 
           onClick={handleApply}
-          className="px-3 py-1 bg-[#007acc] hover:bg-[#0062a3] text-white rounded shadow-sm text-xs"
+          className="px-4 py-1.5 bg-[#007acc] hover:bg-[#0069b3] text-white rounded-md shadow-sm text-xs font-medium transition-colors"
         >
-          Apply
+          Apply Filters
         </button>
       </div>
     </div>

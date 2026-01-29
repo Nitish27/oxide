@@ -63,6 +63,38 @@ pub struct TableMetadata {
     pub comment: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TableColumnStructure {
+    pub name: String,
+    pub data_type: String,
+    pub is_nullable: bool,
+    pub default_value: Option<String>,
+    pub is_primary_key: bool,
+    pub comment: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TableIndexStructure {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub is_unique: bool,
+    pub index_type: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TableConstraintStructure {
+    pub name: String,
+    pub constraint_type: String,
+    pub definition: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TableStructure {
+    pub columns: Vec<TableColumnStructure>,
+    pub indexes: Vec<TableIndexStructure>,
+    pub constraints: Vec<TableConstraintStructure>,
+}
+
 pub struct AppState {
     pub connection_manager: Arc<connection_manager::ConnectionManager>,
 }

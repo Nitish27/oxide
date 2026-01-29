@@ -11,6 +11,39 @@ export interface FilterConfig {
   enabled: boolean;
 }
 
+export interface SortConfig {
+  column: string | null;
+  direction: 'ASC' | 'DESC';
+}
+
+export interface TableColumnStructure {
+  name: string;
+  data_type: string;
+  is_nullable: boolean;
+  default_value: string | null;
+  is_primary_key: boolean;
+  comment: string | null;
+}
+
+export interface TableIndexStructure {
+  name: string;
+  columns: string[];
+  is_unique: boolean;
+  index_type: string;
+}
+
+export interface TableConstraintStructure {
+  name: string;
+  constraint_type: string;
+  definition: string;
+}
+
+export interface TableStructure {
+  columns: TableColumnStructure[];
+  indexes: TableIndexStructure[];
+  constraints: TableConstraintStructure[];
+}
+
 export interface Tab {
   id: string;
   type: TabType;
@@ -27,6 +60,11 @@ export interface Tab {
   totalRows?: number;
   filters?: FilterConfig[];
   isFilterVisible?: boolean;
+  sortConfig?: SortConfig;
+  hiddenColumns?: string[];
+  isColumnsPopoverVisible?: boolean;
+  viewMode?: 'data' | 'structure';
+  tableStructure?: TableStructure;
 }
 
 interface DatabaseState {
@@ -98,6 +136,18 @@ interface DatabaseState {
   updateFilter: (tabId: string, filterId: string, updates: Partial<FilterConfig>) => void;
   toggleFilterBar: (tabId: string) => void;
   setFilters: (tabId: string, filters: FilterConfig[]) => void;
+
+  // Sort actions
+  setSortConfig: (tabId: string, config: SortConfig) => void;
+  clearSort: (tabId: string) => void;
+
+  // Column visibility actions
+  toggleColumnVisibility: (tabId: string, column: string) => void;
+  showAllColumns: (tabId: string) => void;
+  hideAllColumns: (tabId: string, columns: string[]) => void;
+  toggleColumnsPopover: (tabId: string) => void;
+  setViewMode: (tabId: string, mode: 'data' | 'structure') => void;
+  setTableStructure: (tabId: string, structure: TableStructure) => void;
 
   // Refresh mechanism
   refreshTrigger: number;
@@ -280,6 +330,50 @@ export const useDatabaseStore = create<DatabaseState>((set) => ({
   
   setFilters: (tabId, filters) => set((state) => ({
     tabs: state.tabs.map(t => t.id === tabId ? { ...t, filters } : t)
+  })),
+
+  // Sort actions
+  setSortConfig: (tabId, config) => set((state) => ({
+    tabs: state.tabs.map(t => t.id === tabId ? { ...t, sortConfig: config } : t)
+  })),
+
+  clearSort: (tabId) => set((state) => ({
+    tabs: state.tabs.map(t => t.id === tabId ? { ...t, sortConfig: undefined } : t)
+  })),
+
+  // Column visibility actions
+  toggleColumnVisibility: (tabId, column) => set((state) => ({
+    tabs: state.tabs.map(t => {
+      if (t.id !== tabId) return t;
+      const hidden = t.hiddenColumns || [];
+      const isHidden = hidden.includes(column);
+      return {
+        ...t,
+        hiddenColumns: isHidden 
+          ? hidden.filter(c => c !== column)
+          : [...hidden, column]
+      };
+    })
+  })),
+
+  showAllColumns: (tabId) => set((state) => ({
+    tabs: state.tabs.map(t => t.id === tabId ? { ...t, hiddenColumns: [] } : t)
+  })),
+
+  hideAllColumns: (tabId, columns) => set((state) => ({
+    tabs: state.tabs.map(t => t.id === tabId ? { ...t, hiddenColumns: columns } : t)
+  })),
+
+  toggleColumnsPopover: (tabId) => set((state) => ({
+    tabs: state.tabs.map(t => t.id === tabId ? { ...t, isColumnsPopoverVisible: !t.isColumnsPopoverVisible } : t)
+  })),
+
+  setViewMode: (tabId, mode) => set((state) => ({
+    tabs: state.tabs.map(t => t.id === tabId ? { ...t, viewMode: mode } : t)
+  })),
+
+  setTableStructure: (tabId, structure) => set((state) => ({
+    tabs: state.tabs.map(t => t.id === tabId ? { ...t, tableStructure: structure } : t)
   })),
 
   setPrefilledConfig: (config) => set({ prefilledConfig: config }),

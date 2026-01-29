@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow};
-use crate::core::{QueryResult, TableMetadata, connection_manager::ConnectionManager, FilterConfig};
+use crate::core::{QueryResult, TableMetadata, TableStructure, TableColumnStructure, TableIndexStructure, TableConstraintStructure, connection_manager::ConnectionManager, FilterConfig};
 use sqlx::{Column, Row, TypeInfo, ValueRef};
 use std::time::Instant;
 use uuid::Uuid;
@@ -315,6 +315,23 @@ fn build_where_clause(filters: Vec<FilterConfig>, db_type: &str) -> String {
     format!("WHERE {}", conditions.join(" AND "))
 }
 
+fn build_order_clause(sort_column: Option<String>, sort_direction: Option<String>, db_type: &str) -> String {
+    match (sort_column, sort_direction) {
+        (Some(col), dir) => {
+            let quoted_col = match db_type {
+                "mysql" => format!("`{}`", col.replace("`", "``")),
+                _ => format!("\"{}\"", col.replace("\"", "\"\"")),
+            };
+            let direction = match dir.as_deref() {
+                Some("DESC") => "DESC",
+                _ => "ASC",
+            };
+            format!("ORDER BY {} {}", quoted_col, direction)
+        },
+        _ => String::new(),
+    }
+}
+
 pub struct QueryEngine;
 
 impl QueryEngine {
@@ -502,6 +519,8 @@ impl QueryEngine {
         limit: u32,
         offset: u32,
         filters: Vec<FilterConfig>,
+        sort_column: Option<String>,
+        sort_direction: Option<String>,
     ) -> Result<QueryResult> {
         let db_type = {
             if manager.get_postgres_pools().await.contains_key(connection_id) {
@@ -518,17 +537,20 @@ impl QueryEngine {
         match db_type {
             Some("postgres") => {
                  let where_clause = build_where_clause(filters, "postgres");
-                 let sql = format!("SELECT * FROM \"{}\" {} LIMIT {} OFFSET {};", table_name.replace("\"", "\"\""), where_clause, limit, offset);
+                 let order_clause = build_order_clause(sort_column, sort_direction, "postgres");
+                 let sql = format!("SELECT * FROM \"{}\" {} {} LIMIT {} OFFSET {};", table_name.replace("\"", "\"\""), where_clause, order_clause, limit, offset);
                  Self::execute_query(manager, connection_id, &sql).await
             },
             Some("mysql") => {
                  let where_clause = build_where_clause(filters, "mysql");
-                 let sql = format!("SELECT * FROM `{}` {} LIMIT {} OFFSET {};", table_name.replace("`", "``"), where_clause, limit, offset);
+                 let order_clause = build_order_clause(sort_column, sort_direction, "mysql");
+                 let sql = format!("SELECT * FROM `{}` {} {} LIMIT {} OFFSET {};", table_name.replace("`", "``"), where_clause, order_clause, limit, offset);
                  Self::execute_query(manager, connection_id, &sql).await
             },
             Some("sqlite") => {
                  let where_clause = build_where_clause(filters, "sqlite");
-                 let sql = format!("SELECT * FROM \"{}\" {} LIMIT {} OFFSET {};", table_name.replace("\"", "\"\""), where_clause, limit, offset);
+                 let order_clause = build_order_clause(sort_column, sort_direction, "sqlite");
+                 let sql = format!("SELECT * FROM \"{}\" {} {} LIMIT {} OFFSET {};", table_name.replace("\"", "\"\""), where_clause, order_clause, limit, offset);
                  Self::execute_query(manager, connection_id, &sql).await
             },
             Some(_) => Err(anyhow!("Unknown database type")),
@@ -703,5 +725,207 @@ impl QueryEngine {
         }
 
         Err(anyhow!("Connection not found"))
+    }
+
+    pub async fn get_table_structure(
+        manager: &ConnectionManager,
+        connection_id: &Uuid,
+        table_name: &str,
+    ) -> Result<TableStructure> {
+        let db_type = {
+            if manager.get_postgres_pools().await.contains_key(connection_id) {
+                Some("postgres")
+            } else if manager.get_mysql_pools().await.contains_key(connection_id) {
+                Some("mysql")
+            } else if manager.get_sqlite_pools().await.contains_key(connection_id) {
+                Some("sqlite")
+            } else {
+                None
+            }
+        };
+
+        match db_type {
+            Some("postgres") => {
+                let pool = manager.get_postgres_pools().await.get(connection_id).cloned().unwrap();
+                
+                // Fetch columns
+                let col_sql = r#"
+                    SELECT 
+                        column_name, 
+                        data_type, 
+                        is_nullable, 
+                        column_default,
+                        EXISTS (
+                            SELECT 1 FROM information_schema.key_column_usage kcu
+                            JOIN information_schema.table_constraints tc ON kcu.constraint_name = tc.constraint_name
+                            WHERE kcu.table_name = c.table_name AND kcu.column_name = c.column_name AND tc.constraint_type = 'PRIMARY KEY'
+                        ) as is_primary
+                    FROM information_schema.columns c
+                    WHERE table_name = $1 AND table_schema = 'public'
+                    ORDER BY ordinal_position;
+                "#;
+                let col_rows = sqlx::query(col_sql).bind(table_name).fetch_all(&pool).await?;
+                let columns = col_rows.into_iter().map(|row| {
+                    TableColumnStructure {
+                        name: row.get(0),
+                        data_type: row.get(1),
+                        is_nullable: row.get::<String, _>(2) == "YES",
+                        default_value: row.get(3),
+                        is_primary_key: row.get(4),
+                        comment: None, // We could fetch this too if needed
+                    }
+                }).collect();
+
+                // Fetch indexes
+                let idx_sql = "SELECT indexname, indexdef FROM pg_indexes WHERE tablename = $1 AND schemaname = 'public';";
+                let idx_rows = sqlx::query(idx_sql).bind(table_name).fetch_all(&pool).await?;
+                let indexes = idx_rows.into_iter().map(|row| {
+                    let def: String = row.get(1);
+                    TableIndexStructure {
+                        name: row.get(0),
+                        columns: vec![], // Logic to parse columns from def would be complex, leaving empty for now or could just show def
+                        is_unique: def.contains("UNIQUE"),
+                        index_type: "btree".to_string(), // Default in PG
+                    }
+                }).collect();
+
+                // Fetch constraints
+                let cons_sql = r#"
+                    SELECT 
+                        constraint_name, 
+                        constraint_type
+                    FROM information_schema.table_constraints 
+                    WHERE table_name = $1 AND table_schema = 'public';
+                "#;
+                let cons_rows = sqlx::query(cons_sql).bind(table_name).fetch_all(&pool).await?;
+                let constraints = cons_rows.into_iter().map(|row| {
+                    TableConstraintStructure {
+                        name: row.get(0),
+                        constraint_type: row.get(1),
+                        definition: "".to_string(),
+                    }
+                }).collect();
+
+                Ok(TableStructure { columns, indexes, constraints })
+            },
+            Some("mysql") => {
+                let pool = manager.get_mysql_pools().await.get(connection_id).cloned().unwrap();
+                
+                // Fetch columns
+                let col_sql = r#"
+                    SELECT 
+                        COLUMN_NAME, 
+                        COLUMN_TYPE, 
+                        IS_NULLABLE, 
+                        COLUMN_DEFAULT, 
+                        COLUMN_KEY,
+                        COLUMN_COMMENT
+                    FROM information_schema.COLUMNS 
+                    WHERE TABLE_NAME = ? AND TABLE_SCHEMA = DATABASE()
+                    ORDER BY ORDINAL_POSITION;
+                "#;
+                let col_rows = sqlx::query(col_sql).bind(table_name).fetch_all(&pool).await?;
+                let columns = col_rows.into_iter().map(|row| {
+                    TableColumnStructure {
+                        name: row.get(0),
+                        data_type: row.get(1),
+                        is_nullable: row.get::<String, _>(2) == "YES",
+                        default_value: row.get(3),
+                        is_primary_key: row.get::<String, _>(4) == "PRI",
+                        comment: row.get(5),
+                    }
+                }).collect();
+
+                // Fetch indexes
+                let idx_sql = format!("SHOW INDEX FROM `{}`", table_name.replace("`", "``"));
+                let idx_rows = sqlx::query(&idx_sql).fetch_all(&pool).await?;
+                
+                // Group by index name
+                let mut indexes_map: std::collections::HashMap<String, TableIndexStructure> = std::collections::HashMap::new();
+                for row in idx_rows {
+                    let name: String = row.get("Key_name");
+                    let column: String = row.get("Column_name");
+                    let non_unique: i32 = row.get("Non_unique");
+                    
+                    let entry = indexes_map.entry(name.clone()).or_insert(TableIndexStructure {
+                        name: name.clone(),
+                        columns: vec![],
+                        is_unique: non_unique == 0,
+                        index_type: row.get("Index_type"),
+                    });
+                    entry.columns.push(column);
+                }
+                let indexes = indexes_map.into_values().collect();
+
+                // Fetch constraints
+                let cons_sql = "SELECT CONSTRAINT_NAME, CONSTRAINT_TYPE FROM information_schema.TABLE_CONSTRAINTS WHERE TABLE_NAME = ? AND TABLE_SCHEMA = DATABASE();";
+                let cons_rows = sqlx::query(cons_sql).bind(table_name).fetch_all(&pool).await?;
+                let constraints = cons_rows.into_iter().map(|row| {
+                    TableConstraintStructure {
+                        name: row.get(0),
+                        constraint_type: row.get(1),
+                        definition: "".to_string(),
+                    }
+                }).collect();
+
+                Ok(TableStructure { columns, indexes, constraints })
+            },
+            Some("sqlite") => {
+                let pool = manager.get_sqlite_pools().await.get(connection_id).cloned().unwrap();
+                
+                // Fetch columns
+                let col_sql = format!("PRAGMA table_info(\"{}\")", table_name.replace("\"", "\"\""));
+                let col_rows = sqlx::query(&col_sql).fetch_all(&pool).await?;
+                let columns = col_rows.into_iter().map(|row| {
+                    TableColumnStructure {
+                        name: row.get("name"),
+                        data_type: row.get("type"),
+                        is_nullable: row.get::<i32, _>("notnull") == 0,
+                        default_value: row.get("dflt_value"),
+                        is_primary_key: row.get::<i32, _>("pk") > 0,
+                        comment: None,
+                    }
+                }).collect();
+
+                // Fetch indexes
+                let idx_list_sql = format!("PRAGMA index_list(\"{}\")", table_name.replace("\"", "\"\""));
+                let idx_list_rows = sqlx::query(&idx_list_sql).fetch_all(&pool).await?;
+                let mut indexes = Vec::new();
+                for row in idx_list_rows {
+                    let name: String = row.get("name");
+                    let unique: i32 = row.get("unique");
+                    
+                    // Get columns for this index
+                    let idx_info_sql = format!("PRAGMA index_info(\"{}\")", name.replace("\"", "\"\""));
+                    let idx_info_rows = sqlx::query(&idx_info_sql).fetch_all(&pool).await?;
+                    let cols: Vec<String> = idx_info_rows.into_iter().filter_map(|r| r.try_get("name").ok()).collect();
+                    
+                    indexes.push(TableIndexStructure {
+                        name,
+                        columns: cols,
+                        is_unique: unique > 0,
+                        index_type: "btree".to_string(),
+                    });
+                }
+
+                // Fetch constraints (foreign keys)
+                let fk_sql = format!("PRAGMA foreign_key_list(\"{}\")", table_name.replace("\"", "\"\""));
+                let fk_rows = sqlx::query(&fk_sql).fetch_all(&pool).await?;
+                let constraints = fk_rows.into_iter().map(|row| {
+                    let table: String = row.get("table");
+                    let from: String = row.get("from");
+                    let to: String = row.get("to");
+                    TableConstraintStructure {
+                        name: format!("fk_{}_{}", table, from),
+                        constraint_type: "FOREIGN KEY".to_string(),
+                        definition: format!("{} -> {}({})", from, table, to),
+                    }
+                }).collect();
+
+                Ok(TableStructure { columns, indexes, constraints })
+            },
+            Some(_) => Err(anyhow!("Unknown database type")),
+            None => Err(anyhow!("Connection not found"))
+        }
     }
 }

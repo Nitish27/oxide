@@ -83,9 +83,11 @@ async fn get_table_data(
     limit: u32,
     offset: u32,
     filters: Option<Vec<FilterConfig>>,
+    sort_column: Option<String>,
+    sort_direction: Option<String>,
 ) -> Result<QueryResult, String> {
     let filters = filters.unwrap_or_default();
-    QueryEngine::get_table_data(&state.connection_manager, &connection_id, &table_name, limit, offset, filters).await
+    QueryEngine::get_table_data(&state.connection_manager, &connection_id, &table_name, limit, offset, filters, sort_column, sort_direction).await
         .map_err(|e| e.to_string())
 }
 
@@ -112,6 +114,16 @@ async fn get_table_metadata(
 }
 
 #[tauri::command]
+async fn get_table_structure(
+    state: State<'_, AppState>,
+    connection_id: Uuid,
+    table_name: String,
+) -> Result<crate::core::TableStructure, String> {
+    QueryEngine::get_table_structure(&state.connection_manager, &connection_id, &table_name).await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn execute_mutations(
     state: State<'_, AppState>,
     connection_id: Uuid,
@@ -132,7 +144,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
-        .invoke_handler(tauri::generate_handler![connect, test_connection, execute_query, create_database, switch_database, get_databases, get_tables, get_table_data, get_table_count, get_table_metadata, execute_mutations])
+        .invoke_handler(tauri::generate_handler![connect, test_connection, execute_query, create_database, switch_database, get_databases, get_tables, get_table_data, get_table_count, get_table_metadata, get_table_structure, execute_mutations])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
