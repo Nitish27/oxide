@@ -8,6 +8,7 @@ import {
 import { ChevronUp, ChevronDown } from 'lucide-react';
 import { UseTableMutationsReturn } from '../hooks/useTableMutations';
 import { SortConfig } from '../store/databaseStore';
+import { RowContextMenu } from './RowContextMenu';
 
 interface DataTableProps {
   columns: string[];
@@ -18,11 +19,7 @@ interface DataTableProps {
   sortConfig?: SortConfig;
   onSort?: (column: string) => void;
   hiddenColumns?: string[];
-}
-
-interface EditingCell {
-  rowIndex: number;
-  columnIndex: number;
+  pkColumn?: string;
 }
 
 const DEFAULT_COLUMN_WIDTH = 150;
@@ -36,12 +33,10 @@ export const DataTable = ({
   onRowClick,
   sortConfig,
   onSort,
-  hiddenColumns = []
+  hiddenColumns = [],
+  pkColumn
 }: DataTableProps) => {
-  const [editingCell, setEditingCell] = useState<EditingCell | null>(null);
-  const [editValue, setEditValue] = useState<string>('');
   const [localData, setLocalData] = useState<any[][]>(data);
-  const inputRef = useRef<HTMLInputElement>(null);
   const tableRef = useRef<HTMLTableElement>(null);
   
   // Use refs for resize to avoid re-renders during drag
@@ -69,14 +64,6 @@ export const DataTable = ({
   useEffect(() => {
     setLocalData(data);
   }, [data]);
-
-  // Focus input when editing starts
-  useEffect(() => {
-    if (editingCell && inputRef.current) {
-      inputRef.current.focus();
-      inputRef.current.select();
-    }
-  }, [editingCell]);
 
   // Optimized resize handlers using direct DOM manipulation
   useEffect(() => {
@@ -161,67 +148,10 @@ export const DataTable = ({
     return columnWidthsRef.current[columnName] || DEFAULT_COLUMN_WIDTH;
   }, []);
 
-  const startEditing = useCallback((rowIndex: number, columnIndex: number, value: any) => {
-    setEditingCell({ rowIndex, columnIndex });
-    setEditValue(value === null ? '' : String(value));
-  }, []);
-
-  const cancelEditing = useCallback(() => {
-    setEditingCell(null);
-    setEditValue('');
-  }, []);
-
-  const commitEdit = useCallback(() => {
-    if (!editingCell) return;
-
-    const { rowIndex, columnIndex } = editingCell;
-    const columnName = columnNames[columnIndex];
-    const originalValue = data[rowIndex]?.[columnIndex];
-    
-    // Parse value back to appropriate type
-    let newValue: any = editValue;
-    if (editValue === '' || editValue.toLowerCase() === 'null') {
-      newValue = null;
-    } else if (originalValue !== null && typeof originalValue === 'number') {
-      newValue = parseFloat(editValue) || 0;
-    } else if (originalValue !== null && typeof originalValue === 'boolean') {
-      newValue = editValue.toLowerCase() === 'true';
-    }
-
-    // Update local data
-    setLocalData(prev => {
-      const next = prev.map(row => [...row]);
-      if (next[rowIndex]) {
-        next[rowIndex][columnIndex] = newValue;
-      }
-      return next;
-    });
-
-    // Track the mutation
-    mutations.updateCell(rowIndex, columnName, columnIndex, originalValue, newValue);
-
-    cancelEditing();
-  }, [editingCell, editValue, columnNames, data, mutations, cancelEditing]);
-
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      commitEdit();
-    } else if (e.key === 'Escape') {
-      cancelEditing();
-    } else if (e.key === 'Tab') {
-      e.preventDefault();
-      commitEdit();
-      // Move to next cell
-      if (editingCell) {
-        const nextCol = editingCell.columnIndex + 1;
-        if (nextCol < columnNames.length) {
-          const value = localData[editingCell.rowIndex]?.[nextCol];
-          startEditing(editingCell.rowIndex, nextCol, value);
-        }
-      }
-    }
-  }, [commitEdit, cancelEditing, editingCell, columnNames.length, localData, startEditing]);
+  // Sync local data with props
+  useEffect(() => {
+    setLocalData(data);
+  }, [data]);
 
   const getRowStyle = useCallback((rowIndex: number): string => {
     const change = mutations.getRowState(rowIndex);
@@ -235,6 +165,48 @@ export const DataTable = ({
     }
   }, [mutations]);
 
+  const handleDeleteRow = useCallback((rowIndex: number) => {
+    const rowData = localData[rowIndex];
+    if (!rowData) return;
+    
+    // Find primary key value
+    let pkValue = rowIndex; // Fallback to index if no PK
+    if (pkColumn) {
+      const pkIndex = columnNames.indexOf(pkColumn);
+      if (pkIndex >= 0) {
+        pkValue = rowData[pkIndex];
+      }
+    }
+    
+    mutations.deleteRow(rowIndex, pkValue, rowData);
+  }, [localData, pkColumn, columnNames, mutations]);
+
+  const handleDuplicateRow = useCallback((rowIndex: number) => {
+    const rowData = localData[rowIndex];
+    if (!rowData) return;
+    
+    // Create new row with same data but marked as "insert"
+    const newRow = [...rowData];
+    setLocalData(prev => [...prev, newRow]);
+    mutations.insertRow(localData.length, newRow);
+  }, [localData, mutations]);
+
+  const handleEditRowQuery = useCallback((rowIndex: number) => {
+    const rowData = localData[rowIndex];
+    if (!rowData) return;
+    
+    // Find primary key value
+    let pkValue = rowIndex;
+    if (pkColumn) {
+      const pkIndex = columnNames.indexOf(pkColumn);
+      if (pkIndex >= 0) {
+        pkValue = rowData[pkIndex];
+      }
+    }
+    
+    mutations.updateRow(rowIndex, rowData, columnNames, pkValue);
+  }, [localData, columnNames, pkColumn, mutations]);
+
   const getCellStyle = useCallback((rowIndex: number, columnName: string): string => {
     const change = mutations.getRowState(rowIndex);
     if (change?.type === 'update' && change.cellChanges) {
@@ -245,10 +217,10 @@ export const DataTable = ({
   }, [mutations]);
 
   const columns = useMemo(() => {
-    const helper = createColumnHelper<any[]>();
+    const columnHelper = createColumnHelper<any[]>();
     return visibleColumnNames.map((name) => {
       const originalIndex = columnIndexMap.get(name) ?? 0;
-      return helper.accessor(row => row[originalIndex], {
+      return columnHelper.accessor(row => row[originalIndex], {
         id: name,
         header: () => {
           const isSorted = sortConfig?.column === name;
@@ -274,28 +246,10 @@ export const DataTable = ({
         cell: info => {
           const value = info.getValue();
           const rowIndex = info.row.index;
-          const isEditing = editingCell?.rowIndex === rowIndex && editingCell?.columnIndex === originalIndex;
           const isDeleted = mutations.getRowState(rowIndex)?.type === 'delete';
 
-          if (isEditing) {
-            return (
-              <input
-                ref={inputRef}
-                type="text"
-                value={editValue}
-                onChange={(e) => setEditValue(e.target.value)}
-                onKeyDown={handleKeyDown}
-                onBlur={commitEdit}
-                className="w-full bg-accent/20 border border-accent rounded px-1 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-accent"
-              />
-            );
-          }
-
           return (
-            <span 
-              className={`cursor-text ${isDeleted ? 'line-through' : ''}`}
-              onDoubleClick={() => !isDeleted && startEditing(rowIndex, originalIndex, value)}
-            >
+            <span className={isDeleted ? 'line-through' : ''}>
               {value === null ? (
                 <span className="text-text-muted italic">NULL</span>
               ) : typeof value === 'boolean' ? (
@@ -308,7 +262,7 @@ export const DataTable = ({
         },
       });
     });
-  }, [visibleColumnNames, columnIndexMap, editingCell, editValue, handleKeyDown, commitEdit, startEditing, mutations, sortConfig, onSort]);
+  }, [visibleColumnNames, columnIndexMap, mutations, sortConfig, onSort]);
 
   const table = useReactTable({
     data: localData,
@@ -369,32 +323,40 @@ export const DataTable = ({
             ))}
           </thead>
           <tbody>
-            {rows.map((row, index) => (
-              <tr 
+            {rows.map((row) => (
+              <RowContextMenu
                 key={row.id}
-                onClick={() => onRowClick?.(index)}
-                className={`hover:bg-accent/5 border-b border-border group cursor-default outline-none ${
-                   selectedRowIndex === index ? 'bg-[#2a2d2e] ring-1 ring-inset ring-accent/50' : ''
-                } ${getRowStyle(index)}`}
+                rowData={row.original}
+                columnNames={columnNames}
+                onEdit={() => handleEditRowQuery(row.index)}
+                onDelete={() => handleDeleteRow(row.index)}
+                onDuplicate={() => handleDuplicateRow(row.index)}
               >
-                {row.getVisibleCells().map(cell => {
-                  const width = getColumnWidth(cell.column.id);
-                  return (
-                    <td 
-                      key={cell.id}
-                      data-column={cell.column.id}
-                      className={`px-3 py-1 border-r border-border truncate whitespace-nowrap overflow-hidden ${getCellStyle(index, cell.column.id)}`}
-                      style={{ 
-                        width,
-                        minWidth: MIN_COLUMN_WIDTH,
-                        maxWidth: width
-                      }}
-                    >
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </td>
-                  );
-                })}
-              </tr>
+                <tr 
+                  onClick={() => onRowClick?.(row.index)}
+                  className={`hover:bg-accent/5 border-b border-border group cursor-default outline-none ${
+                    selectedRowIndex === row.index ? 'bg-[#2a2d2e] ring-1 ring-inset ring-accent/50' : ''
+                  } ${getRowStyle(row.index)}`}
+                >
+                  {row.getVisibleCells().map(cell => {
+                    const width = getColumnWidth(cell.column.id);
+                    return (
+                      <td 
+                        key={cell.id}
+                        data-column={cell.column.id}
+                        className={`px-3 py-1 border-r border-border truncate whitespace-nowrap overflow-hidden ${getCellStyle(row.index, cell.column.id)}`}
+                        style={{ 
+                          width,
+                          minWidth: MIN_COLUMN_WIDTH,
+                          maxWidth: width
+                        }}
+                      >
+                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                      </td>
+                    );
+                  })}
+                </tr>
+              </RowContextMenu>
             ))}
           </tbody>
         </table>

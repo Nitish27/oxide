@@ -23,9 +23,10 @@ export interface MutationState {
 
 export interface UseTableMutationsReturn {
   state: MutationState;
-  updateCell: (rowIndex: number, columnName: string, columnIndex: number, originalValue: any, newValue: any) => void;
+  updateCell: (rowIndex: number, columnName: string, columnIndex: number, originalValue: any, newValue: any, primaryKeyValue: any) => void;
   insertRow: (rowIndex: number, data: any[]) => void;
   deleteRow: (rowIndex: number, primaryKeyValue: any, originalData: any[]) => void;
+  updateRow: (rowIndex: number, rowData: any[], columns: string[], primaryKeyValue: any) => void;
   revertRow: (rowIndex: number) => void;
   revertAll: () => void;
   getRowState: (rowIndex: number) => RowChange | undefined;
@@ -40,7 +41,8 @@ export function useTableMutations(): UseTableMutationsReturn {
     columnName: string,
     columnIndex: number,
     originalValue: any,
-    newValue: any
+    newValue: any,
+    primaryKeyValue: any
   ) => {
     setChanges(prev => {
       const next = new Map(prev);
@@ -55,12 +57,10 @@ export function useTableMutations(): UseTableMutationsReturn {
       }
 
       if (existing?.type === 'update') {
-        // Add or update the cell change
-        const cellChanges = existing.cellChanges || [];
+        const cellChanges = [...(existing.cellChanges || [])];
         const existingCellIndex = cellChanges.findIndex(c => c.columnName === columnName);
         
         if (existingCellIndex >= 0) {
-          // If reverting to original value, remove the change
           if (cellChanges[existingCellIndex].originalValue === newValue) {
             cellChanges.splice(existingCellIndex, 1);
             if (cellChanges.length === 0) {
@@ -68,12 +68,19 @@ export function useTableMutations(): UseTableMutationsReturn {
               return next;
             }
           } else {
-            cellChanges[existingCellIndex].newValue = newValue;
+            cellChanges[existingCellIndex] = {
+              ...cellChanges[existingCellIndex],
+              newValue
+            };
           }
         } else {
           cellChanges.push({ rowIndex, columnName, originalValue, newValue });
         }
-        existing.cellChanges = cellChanges;
+        
+        next.set(rowIndex, {
+          ...existing,
+          cellChanges
+        });
         return next;
       }
 
@@ -85,6 +92,7 @@ export function useTableMutations(): UseTableMutationsReturn {
       next.set(rowIndex, {
         type: 'update',
         rowIndex,
+        primaryKeyValue,
         cellChanges: [{ rowIndex, columnName, originalValue, newValue }]
       });
       return next;
@@ -124,6 +132,26 @@ export function useTableMutations(): UseTableMutationsReturn {
     });
   }, []);
 
+  const updateRow = useCallback((rowIndex: number, rowData: any[], columns: string[], primaryKeyValue: any) => {
+    setChanges(prev => {
+      const next = new Map(prev);
+      const cellChanges = columns.map((name, idx) => ({
+        rowIndex,
+        columnName: name,
+        originalValue: rowData[idx],
+        newValue: rowData[idx]
+      }));
+
+      next.set(rowIndex, {
+        type: 'update',
+        rowIndex,
+        primaryKeyValue,
+        cellChanges
+      });
+      return next;
+    });
+  }, []);
+
   const revertRow = useCallback((rowIndex: number) => {
     setChanges(prev => {
       const next = new Map(prev);
@@ -156,15 +184,18 @@ export function useTableMutations(): UseTableMutationsReturn {
           `INSERT INTO "${tableName}" (${columns.map(c => `"${c}"`).join(', ')}) VALUES (${values.join(', ')});`
         );
       } else if (change.type === 'update' && change.cellChanges) {
-        const pkValue = change.cellChanges[0]?.rowIndex; // We'll need actual PK value in practice
+        const pkVal = change.primaryKeyValue !== undefined ? (
+          typeof change.primaryKeyValue === 'string' ? `'${change.primaryKeyValue.replace(/'/g, "''")}'` : change.primaryKeyValue
+        ) : change.cellChanges[0]?.rowIndex;
+
         const setClauses = change.cellChanges.map(cc => {
           const val = cc.newValue === null ? 'NULL' : 
             typeof cc.newValue === 'string' ? `'${cc.newValue.replace(/'/g, "''")}'` : cc.newValue;
           return `"${cc.columnName}" = ${val}`;
         });
-        // Note: In real implementation, we need actual primary key value from data
+        
         statements.push(
-          `UPDATE "${tableName}" SET ${setClauses.join(', ')} WHERE "${primaryKeyColumn}" = ${pkValue};`
+          `UPDATE "${tableName}" SET ${setClauses.join(', ')} WHERE "${primaryKeyColumn}" = ${pkVal};`
         );
       } else if (change.type === 'delete' && change.primaryKeyValue !== undefined) {
         const pkVal = typeof change.primaryKeyValue === 'string' 
@@ -187,6 +218,7 @@ export function useTableMutations(): UseTableMutationsReturn {
     updateCell,
     insertRow,
     deleteRow,
+    updateRow,
     revertRow,
     revertAll,
     getRowState,

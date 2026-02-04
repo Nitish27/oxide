@@ -1,6 +1,53 @@
-# Tauri + React + Typescript
+# Oxide DB
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+Oxide is a native database client built with Tauri, React, and Rust. It's designed to be fast, lightweight, and user-friendly, inspired by premium tools like TablePlus.
+
+## Features
+
+- **Multi-Database Support**: Connect to PostgreSQL, MySQL, and SQLite.
+- **Modern Sidebar Experience**:
+  - **Items**: Explore your databases, schemas, and tables.
+  - **Queries**: Manage your saved SQL scripts.
+  - **History**: A persistent, searchable log of all executed queries, grouped by date.
+- **Advanced Query History**:
+  - **Automatic Tracking**: Every query executed (manually or via table browsing) is recorded.
+  - **Date Grouping**: Queries are logically grouped by day with collapsible sections.
+  - **Search & Filter**: Quickly find past queries using the integrated search.
+  - **Replay**: Instant replay of any historical query into a new editor tab.
+- **Persistence**: Your connection settings and query history are saved locally for a seamless experience across restarts.
+- **Native Performance**: Leverages Rust for backend operations and Tauri for a smooth desktop experience.
+
+## Getting Started
+
+### Prerequisites
+
+- [Node.js](https://nodejs.org/)
+- [Rust](https://www.rust-lang.org/)
+- [Tauri Dependencies](https://tauri.app/v1/guides/getting-started/prerequisites)
+
+### Installation
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/Nitish27/oxide.git
+   cd oxide
+   ```
+
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+
+3. Run in development mode:
+   ```bash
+   npm run tauri dev
+   ```
+
+## Tech Stack
+
+- **Frontend**: React, TypeScript, Tailwind CSS, Monaco Editor, Lucide Icons.
+- **Backend**: Rust (using `sqlx` for database interactions).
+- **Framework**: [Tauri](https://tauri.app/).
 
 ## Recommended IDE Setup
 

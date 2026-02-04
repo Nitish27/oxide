@@ -1,4 +1,4 @@
-import { X, Layout, Terminal, Settings, History } from 'lucide-react';
+import { X, Layout, Terminal, Settings } from 'lucide-react';
 import { useDatabaseStore, TabType } from '../store/databaseStore';
 
 const TabIcon = ({ type, size = 12 }: { type: TabType; size?: number }) => {
@@ -6,7 +6,6 @@ const TabIcon = ({ type, size = 12 }: { type: TabType; size?: number }) => {
     case 'table': return <Layout size={size} />;
     case 'query': return <Terminal size={size} />;
     case 'structure': return <Settings size={size} />;
-    case 'history': return <History size={size} />;
     default: return <Layout size={size} />;
   }
 };

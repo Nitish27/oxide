@@ -25,7 +25,9 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
     toggleFilterBar,
     setSortConfig,
     toggleColumnsPopover,
-    setViewMode
+    setViewMode,
+    addToHistory,
+    activeDatabase
   } = useDatabaseStore();
   const activeTab = tabs.find(t => t.id === activeTabId);
   const [tableData, setTableData] = useState<any[][]>([]);
@@ -33,7 +35,25 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
   const [loading, setLoading] = useState(false);
   const mutations = useTableMutations();
   const [executionTime, setExecutionTime] = useState<number | undefined>();
+  const [pkColumn, setPkColumn] = useState<string | undefined>();
   const viewMode = activeTab?.viewMode || 'data';
+
+  useEffect(() => {
+    const fetchStructure = async () => {
+      try {
+        const result = await invoke<any>('get_table_structure', { connectionId, tableName });
+        if (result && result.columns) {
+          const pk = result.columns.find((c: any) => c.is_primary_key)?.name;
+          setPkColumn(pk);
+        }
+      } catch (err) {
+        console.error("[ERROR] Failed to fetch table structure:", err);
+      }
+    };
+    if (tableName && connectionId) {
+      fetchStructure();
+    }
+  }, [tableName, connectionId]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -68,6 +88,16 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
                     setExecutionTime(result.execution_time_ms);
                 }
                 
+                // Construct SQL for history
+                const sql = `SELECT * FROM "${tableName}"${filters.length ? ' WHERE ...' : ''} LIMIT ${limit} OFFSET ${offset};`;
+                addToHistory({
+                  sql,
+                  connectionId,
+                  database: activeDatabase || undefined,
+                  executionTimeMs: result.execution_time_ms || 0,
+                  rowsAffected: result.rows.length
+                });
+
                 // Update store
                 if (activeTabId) {
                   updateTab(activeTabId, {
@@ -164,6 +194,7 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
                   sortConfig={activeTab?.sortConfig}
                   onSort={handleSort}
                   hiddenColumns={activeTab?.hiddenColumns}
+                  pkColumn={pkColumn}
               />
               )}
           </div>
@@ -208,8 +239,8 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
         <div className="flex-1 overflow-auto">
           {mutations.state.hasChanges ? (
             <PendingChanges 
-              statements={mutations.generateSQL(tableName, tableColumns)}
-              onCommit={() => handleCommit(mutations.generateSQL(tableName, tableColumns))}
+              statements={mutations.generateSQL(tableName, tableColumns, pkColumn)}
+              onCommit={(editedStatements) => handleCommit(editedStatements)}
               onDiscard={mutations.revertAll}
               isCommitting={loading}
             />

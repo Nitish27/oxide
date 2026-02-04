@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 
-export type TabType = 'table' | 'query' | 'structure' | 'history';
+export type TabType = 'table' | 'query' | 'structure';
 
 export interface FilterConfig {
   id: string;
@@ -67,6 +67,16 @@ export interface Tab {
   tableStructure?: TableStructure;
 }
 
+export interface HistoryItem {
+  id: string;
+  sql: string;
+  timestamp: number;
+  connectionId: string;
+  database?: string;
+  executionTimeMs?: number;
+  rowsAffected?: number;
+}
+
 interface DatabaseState {
   activeConnectionId: string | null;
   activeDatabase: string | null;
@@ -101,6 +111,9 @@ interface DatabaseState {
   tabs: Tab[];
   activeTabId: string | null;
 
+  // Query History
+  queryHistory: HistoryItem[];
+
   // UI state
   showConnectionModal: boolean;
   showDatabaseSelector: boolean;
@@ -113,6 +126,7 @@ interface DatabaseState {
   prefilledConfig: any | null;
   connectionModalMode: 'manual' | 'url';
   sidebarSearchTerm: string;
+  sidebarViewMode: 'items' | 'queries' | 'history';
 
   setActiveConnection: (id: string | null) => void;
   setActiveDatabase: (db: string | null) => Promise<void>;
@@ -122,6 +136,7 @@ interface DatabaseState {
   setActiveSchema: (schema: string | null) => void;
   setActiveTable: (table: string | null) => void;
   addConnection: (connection: any) => void;
+  setSidebarViewMode: (mode: 'items' | 'queries' | 'history') => void;
   
   // Tab actions
   openTab: (tab: Omit<Tab, 'id'>) => void;
@@ -149,6 +164,9 @@ interface DatabaseState {
   setViewMode: (tabId: string, mode: 'data' | 'structure') => void;
   setTableStructure: (tabId: string, structure: TableStructure) => void;
 
+  // History actions
+  addToHistory: (item: Omit<HistoryItem, 'id' | 'timestamp'>) => void;
+
   // Refresh mechanism
   refreshTrigger: number;
   triggerRefresh: () => void;
@@ -171,6 +189,7 @@ export const useDatabaseStore = create<DatabaseState>((set) => ({
   ],
   tabs: [],
   activeTabId: null,
+  queryHistory: JSON.parse(localStorage.getItem('oxide_query_history') || '[]'),
   refreshTrigger: 0,
   databases: [],
   showConnectionModal: false,
@@ -184,10 +203,25 @@ export const useDatabaseStore = create<DatabaseState>((set) => ({
   prefilledConfig: null,
   connectionModalMode: 'manual',
   sidebarSearchTerm: '',
+  sidebarViewMode: 'items',
   
   triggerRefresh: () => set((state) => ({ refreshTrigger: state.refreshTrigger + 1 })),
   setShowConnectionModal: (show) => set({ showConnectionModal: show }),
   setShowDatabaseSelector: (show) => set({ showDatabaseSelector: show }),
+  setSidebarViewMode: (mode) => set({ sidebarViewMode: mode }),
+
+  addToHistory: (item) => set((state) => {
+    const newItem: HistoryItem = {
+      ...item,
+      id: Math.random().toString(36).substring(7),
+      timestamp: Date.now()
+    };
+    const newHistory = [newItem, ...state.queryHistory].slice(0, 100);
+    localStorage.setItem('oxide_query_history', JSON.stringify(newHistory));
+    return {
+      queryHistory: newHistory
+    };
+  }),
 
   setActiveConnection: (id) => set((state) => {
     const conn = state.savedConnections.find(c => c.id === id);

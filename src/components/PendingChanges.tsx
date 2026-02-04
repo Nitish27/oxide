@@ -1,22 +1,38 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ChevronDown, ChevronRight, Check, RotateCcw } from 'lucide-react';
+import { cn } from '../utils/cn';
 
 interface PendingChangesProps {
   statements: string[];
-  onCommit: () => void;
+  onCommit: (statements: string[]) => void;
   onDiscard: () => void;
   isCommitting?: boolean;
 }
 
 export const PendingChanges = ({ 
-  statements, 
+  statements: initialStatements, 
   onCommit, 
   onDiscard,
   isCommitting = false 
 }: PendingChangesProps) => {
   const [expanded, setExpanded] = useState(true);
+  const [editedStatements, setEditedStatements] = useState<string[]>(initialStatements);
 
-  if (statements.length === 0) {
+  // Sync with prop when it significantly changes (e.g., new mutation added)
+  // or if we were empty before
+  useEffect(() => {
+    if (initialStatements.length !== editedStatements.length) {
+      setEditedStatements(initialStatements);
+    }
+  }, [initialStatements]);
+
+  const handleStatementChange = (index: number, value: string) => {
+    const next = [...editedStatements];
+    next[index] = value;
+    setEditedStatements(next);
+  };
+
+  if (initialStatements.length === 0) {
     return null;
   }
 
@@ -30,7 +46,7 @@ export const PendingChanges = ({
         <div className="flex items-center gap-2">
           {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
           <span className="text-xs font-medium text-yellow-500">
-            {statements.length} pending change(s)
+            {initialStatements.length} pending change(s)
           </span>
         </div>
         <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
@@ -43,7 +59,7 @@ export const PendingChanges = ({
             Discard
           </button>
           <button
-            onClick={onCommit}
+            onClick={() => onCommit(editedStatements)}
             disabled={isCommitting}
             className="flex items-center gap-1 px-2 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-500 transition-colors font-medium disabled:opacity-50"
           >
@@ -53,19 +69,24 @@ export const PendingChanges = ({
         </div>
       </div>
 
-      {/* SQL Preview */}
+      {/* SQL Preview / Editor */}
       {expanded && (
-        <div className="p-3 max-h-48 overflow-auto font-mono text-[11px] space-y-1">
-          {statements.map((sql, index) => (
-            <div key={index} className="flex items-start gap-2">
-              <span className="text-text-muted select-none">{index + 1}.</span>
-              <code className={`flex-1 ${
-                sql.startsWith('INSERT') ? 'text-green-400' :
-                sql.startsWith('UPDATE') ? 'text-yellow-400' :
-                sql.startsWith('DELETE') ? 'text-red-400' : 'text-text-primary'
-              }`}>
-                {sql}
-              </code>
+        <div className="p-3 max-h-48 overflow-auto font-mono text-[11px] space-y-2">
+          {editedStatements.map((sql, index) => (
+            <div key={index} className="flex items-start gap-2 group">
+              <span className="text-text-muted select-none pt-1">{index + 1}.</span>
+              <textarea
+                value={sql}
+                onChange={(e) => handleStatementChange(index, e.target.value)}
+                rows={Math.max(1, sql.split('\n').length)}
+                className={cn(
+                  "flex-1 bg-transparent border-none outline-none resize-none p-1 rounded hover:bg-white/5 focus:bg-white/5",
+                  sql.startsWith('INSERT') ? 'text-green-400' :
+                  sql.startsWith('UPDATE') ? 'text-yellow-400' :
+                  sql.startsWith('DELETE') ? 'text-red-400' : 'text-text-primary'
+                )}
+                spellCheck={false}
+              />
             </div>
           ))}
         </div>

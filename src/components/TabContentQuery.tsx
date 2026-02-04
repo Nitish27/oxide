@@ -12,7 +12,7 @@ interface TabContentQueryProps {
 }
 
 export const TabContentQuery = ({ id, initialQuery = '', connectionId }: TabContentQueryProps) => {
-  const { updateTab } = useDatabaseStore();
+  const { updateTab, addToHistory, activeDatabase } = useDatabaseStore();
   const [query, setQuery] = useState(initialQuery);
   const [results, setResults] = useState<{ columns: string[]; rows: any[][] } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -40,9 +40,21 @@ export const TabContentQuery = ({ id, initialQuery = '', connectionId }: TabCont
 
       if (result && result.columns) {
         setResults({ columns: result.columns, rows: result.rows });
+        const time = result.execution_time_ms || Math.round(performance.now() - start);
+        const rowsCount = result.rows.length;
+        
         setStats({ 
-          time: result.execution_time_ms || Math.round(performance.now() - start), 
-          rows: result.rows.length 
+          time, 
+          rows: rowsCount 
+        });
+
+        // Add to history
+        addToHistory({
+          sql: query,
+          connectionId,
+          database: activeDatabase || undefined,
+          executionTimeMs: time,
+          rowsAffected: rowsCount
         });
       }
     } catch (err: any) {
