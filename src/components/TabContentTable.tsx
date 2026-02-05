@@ -8,6 +8,7 @@ import { TableFooter } from './TableFooter';
 import { FilterBar } from './FilterBar';
 import { ColumnVisibilityPopover } from './ColumnVisibilityPopover';
 import { TabContentStructure } from './TabContentStructure';
+import { ExportModal } from './ExportModal';
 
 interface TabContentTableProps {
   tableName: string;
@@ -36,6 +37,7 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
   const mutations = useTableMutations();
   const [executionTime, setExecutionTime] = useState<number | undefined>();
   const [pkColumn, setPkColumn] = useState<string | undefined>();
+  const [showExportModal, setShowExportModal] = useState(false);
   const viewMode = activeTab?.viewMode || 'data';
 
   useEffect(() => {
@@ -232,7 +234,18 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
         isFiltersVisible={activeTab?.isFilterVisible}
         onToggleColumns={() => activeTabId && toggleColumnsPopover(activeTabId)}
         isColumnsVisible={activeTab?.isColumnsPopoverVisible}
+        onExport={() => setShowExportModal(true)}
       />
+
+      {showExportModal && (
+        <ExportModal
+          tableName={tableName}
+          connectionId={connectionId}
+          filters={activeTab?.filters || []}
+          sortConfig={activeTab?.sortConfig}
+          onClose={() => setShowExportModal(false)}
+        />
+      )}
 
       {/* Bottom Console / Pending Changes */}
       <div className="h-40 bg-[#252526] border-t border-[#1e1e1e] flex flex-col shrink-0">

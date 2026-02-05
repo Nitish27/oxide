@@ -4,6 +4,8 @@ use sqlx::{Column, Row, TypeInfo, ValueRef};
 use std::time::Instant;
 use uuid::Uuid;
 use serde_json::Value;
+use std::fs::File;
+use std::io::Write;
 
 // Macro to map rows without generic trait hell
 macro_rules! map_rows {
@@ -927,5 +929,100 @@ impl QueryEngine {
             Some(_) => Err(anyhow!("Unknown database type")),
             None => Err(anyhow!("Connection not found"))
         }
+    }
+
+    pub async fn export_table_data(
+        manager: &ConnectionManager,
+        connection_id: &Uuid,
+        table_name: &str,
+        filters: Vec<FilterConfig>,
+        sort_column: Option<String>,
+        sort_direction: Option<String>,
+        format: &str,
+        file_path: &str,
+    ) -> Result<u64> {
+        let db_type = {
+            if manager.get_postgres_pools().await.contains_key(connection_id) { Some("postgres") }
+            else if manager.get_mysql_pools().await.contains_key(connection_id) { Some("mysql") }
+            else if manager.get_sqlite_pools().await.contains_key(connection_id) { Some("sqlite") }
+            else { None }
+        };
+
+        if db_type.is_none() { return Err(anyhow!("Connection not found")); }
+        let db_type = db_type.unwrap();
+
+        let where_clause = build_where_clause(filters, db_type);
+        let order_clause = build_order_clause(sort_column, sort_direction, db_type);
+        
+        let sql = match db_type {
+            "postgres" | "sqlite" => format!("SELECT * FROM \"{}\" {} {};", table_name.replace("\"", "\"\""), where_clause, order_clause),
+            "mysql" => format!("SELECT * FROM `{}` {} {};", table_name.replace("`", "``"), where_clause, order_clause),
+            _ => return Err(anyhow!("Unknown database type")),
+        };
+
+        let result = Self::execute_query(manager, connection_id, &sql).await?;
+        let rows_count = result.rows.len() as u64;
+
+        let mut file = File::create(file_path)?;
+
+        match format {
+            "csv" => {
+                let mut wtr = csv::Writer::from_writer(file);
+                // Write headers
+                wtr.write_record(&result.columns)?;
+                // Write rows
+                for row in result.rows {
+                    let record: Vec<String> = row.into_iter().map(|v| match v {
+                        Value::Null => "".to_string(),
+                        Value::String(s) => s,
+                        Value::Number(n) => n.to_string(),
+                        Value::Bool(b) => b.to_string(),
+                        _ => v.to_string(),
+                    }).collect();
+                    wtr.write_record(&record)?;
+                }
+                wtr.flush()?;
+            },
+            "json" => {
+                let mut json_rows = Vec::new();
+                for row in result.rows {
+                    let mut obj = serde_json::Map::new();
+                    for (i, col) in result.columns.iter().enumerate() {
+                        obj.insert(col.clone(), row[i].clone());
+                    }
+                    json_rows.push(Value::Object(obj));
+                }
+                let json_data = serde_json::to_string_pretty(&json_rows)?;
+                file.write_all(json_data.as_bytes())?;
+            },
+            "sql" => {
+                for row in result.rows {
+                    let values: Vec<String> = row.into_iter().map(|v| match v {
+                        Value::Null => "NULL".to_string(),
+                        Value::String(s) => format!("'{}'", s.replace("'", "''")),
+                        Value::Number(n) => n.to_string(),
+                        Value::Bool(b) => if b { "true" } else { "false" }.to_string(),
+                        _ => format!("'{}'", v.to_string().replace("'", "''")),
+                    }).collect();
+                    
+                    let insert_sql = match db_type {
+                        "mysql" => format!("INSERT INTO `{}` ({}) VALUES ({});\n", 
+                            table_name.replace("`", "``"), 
+                            result.columns.iter().map(|c| format!("`{}`", c.replace("`", "``"))).collect::<Vec<_>>().join(", "),
+                            values.join(", ")
+                        ),
+                        _ => format!("INSERT INTO \"{}\" ({}) VALUES ({});\n", 
+                            table_name.replace("\"", "\"\""), 
+                            result.columns.iter().map(|c| format!("\"{}\"", c.replace("\"", "\"\""))).collect::<Vec<_>>().join(", "),
+                            values.join(", ")
+                        ),
+                    };
+                    file.write_all(insert_sql.as_bytes())?;
+                }
+            },
+            _ => return Err(anyhow!("Unsupported export format")),
+        }
+
+        Ok(rows_count)
     }
 }

@@ -133,6 +133,22 @@ async fn execute_mutations(
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn export_table_data(
+    state: State<'_, AppState>,
+    connection_id: Uuid,
+    table_name: String,
+    filters: Option<Vec<FilterConfig>>,
+    sort_column: Option<String>,
+    sort_direction: Option<String>,
+    format: String,
+    file_path: String,
+) -> Result<u64, String> {
+    let filters = filters.unwrap_or_default();
+    QueryEngine::export_table_data(&state.connection_manager, &connection_id, &table_name, filters, sort_column, sort_direction, &format, &file_path).await
+        .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let connection_manager = Arc::new(ConnectionManager::new());
@@ -144,7 +160,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
-        .invoke_handler(tauri::generate_handler![connect, test_connection, execute_query, create_database, switch_database, get_databases, get_tables, get_table_data, get_table_count, get_table_metadata, get_table_structure, execute_mutations])
+        .invoke_handler(tauri::generate_handler![connect, test_connection, execute_query, create_database, switch_database, get_databases, get_tables, get_table_data, get_table_count, get_table_metadata, get_table_structure, execute_mutations, export_table_data])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

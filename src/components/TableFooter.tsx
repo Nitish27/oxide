@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, Columns, Filter, Plus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Columns, Filter, Plus, Download } from 'lucide-react';
 import { cn } from '../utils/cn';
 
 interface TableFooterProps {
@@ -14,6 +14,7 @@ interface TableFooterProps {
   isFiltersVisible?: boolean;
   onToggleColumns?: () => void;
   isColumnsVisible?: boolean;
+  onExport?: () => void;
 }
 
 export const TableFooter = ({
@@ -28,7 +29,8 @@ export const TableFooter = ({
   onToggleFilters,
   isFiltersVisible,
   onToggleColumns,
-  isColumnsVisible
+  isColumnsVisible,
+  onExport
 }: TableFooterProps) => {
   const start = totalRows > 0 ? offset + 1 : 0;
   const end = Math.min(offset + pageSize, totalRows);
@@ -100,6 +102,16 @@ export const TableFooter = ({
              <span>Filters</span>
            </button>
         </div>
+
+        {onExport && (
+          <button 
+            onClick={onExport}
+            className="flex items-center gap-1.5 px-3 h-6 bg-[#3C3C3C] border border-[#444444] rounded text-[#cccccc] hover:bg-[#454545] hover:text-white transition-colors"
+          >
+            <Download size={12} className="text-[#999999]" />
+            <span>Export</span>
+          </button>
+        )}
 
         <div className="flex items-center border border-[#444444] rounded bg-[#3C3C3C] h-6 overflow-hidden">
            <button 
