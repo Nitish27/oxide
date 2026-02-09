@@ -41,6 +41,7 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
   const [commitError, setCommitError] = useState<string | null>(null);
   const viewMode = activeTab?.viewMode || 'data';
   const [newRowCounter, setNewRowCounter] = useState(0);
+  const [lastExecutedSql, setLastExecutedSql] = useState<string | null>(null);
 
 
   useEffect(() => {
@@ -95,6 +96,7 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
                 
                 // Construct SQL for history
                 const sql = `SELECT * FROM "${tableName}"${filters.length ? ' WHERE ...' : ''} LIMIT ${limit} OFFSET ${offset};`;
+                setLastExecutedSql(sql);
                 addToHistory({
                   sql,
                   connectionId,
@@ -129,8 +131,25 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
     if (!connectionId || statements.length === 0) return;
     setLoading(true);
     setCommitError(null);
+    const startTime = Date.now();
     try {
       await invoke('execute_mutations', { connectionId, statements });
+      
+      // Log each statement to history
+      const duration = Math.round((Date.now() - startTime) / statements.length);
+      statements.forEach((sql, idx) => {
+        if (idx === statements.length - 1) {
+          setLastExecutedSql(sql);
+        }
+        addToHistory({
+          sql,
+          connectionId,
+          database: activeDatabase || undefined,
+          executionTimeMs: duration,
+          rowsAffected: 1 // Approximate
+        });
+      });
+
       mutations.revertAll();
       // Refresh data
       triggerRefresh();
@@ -299,10 +318,8 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
                <div className="flex gap-2">
                   <span className="text-text-secondary">-- {new Date().toISOString().replace('T', ' ').split('.')[0]}</span>
                </div>
-               <div className="text-[#a6e22e]">
-                   SELECT * FROM "{tableName}" 
-                   {activeTab?.filters?.filter(f => f.enabled).length ? ' WHERE ... ' : ''}
-                   LIMIT {activeTab?.pageSize || 100} OFFSET {activeTab?.offset || 0};
+               <div className="text-[#a6e22e] whitespace-pre-wrap">
+                   {lastExecutedSql || `SELECT * FROM "${tableName}" LIMIT ${activeTab?.pageSize || 100} OFFSET ${activeTab?.offset || 0};`}
                </div>
             </div>
           )}
