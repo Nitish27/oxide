@@ -44,6 +44,12 @@ function App() {
           });
         }
       }
+
+      // ⌘R or Ctrl+R for Refresh
+      if ((e.metaKey || e.ctrlKey) && e.key === 'r') {
+        e.preventDefault();
+        useDatabaseStore.getState().triggerRefresh();
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);

@@ -1,17 +1,22 @@
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import {
   useReactTable,
   getCoreRowModel,
   flexRender,
   createColumnHelper,
 } from '@tanstack/react-table';
+import { useVirtualizer } from '@tanstack/react-virtual';
 
 interface QueryResultsTableProps {
   columns: string[];
   data: any[][];
 }
 
+const ROW_HEIGHT = 28;
+
 export const QueryResultsTable = ({ columns: columnNames, data }: QueryResultsTableProps) => {
+  const parentRef = useRef<HTMLDivElement>(null);
+
   const columns = useMemo(() => {
     const helper = createColumnHelper<any[]>();
     return columnNames.map((name, index) => 
@@ -42,6 +47,15 @@ export const QueryResultsTable = ({ columns: columnNames, data }: QueryResultsTa
     getCoreRowModel: getCoreRowModel(),
   });
 
+  const { rows } = table.getRowModel();
+
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 20,
+  });
+
   if (columnNames.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center text-text-muted text-xs">
@@ -52,7 +66,7 @@ export const QueryResultsTable = ({ columns: columnNames, data }: QueryResultsTa
 
   return (
     <div className="flex flex-col h-full bg-[#1e1e1e]">
-      <div className="flex-1 overflow-auto">
+      <div ref={parentRef} className="flex-1 overflow-auto">
         <table className="w-full border-collapse text-[11px]" style={{ minWidth: 'max-content' }}>
           <thead className="sticky top-0 z-10 bg-[#2C2C2C] border-b border-[#3C3C3C] shadow-sm">
             {table.getHeaderGroups().map(headerGroup => (
@@ -69,25 +83,36 @@ export const QueryResultsTable = ({ columns: columnNames, data }: QueryResultsTa
               </tr>
             ))}
           </thead>
-          <tbody>
-            {table.getRowModel().rows.map((row, index) => (
-              <tr 
-                key={row.id}
-                className="hover:bg-accent/5 border-b border-[#2C2C2C] group transition-colors"
-              >
-                <td className="px-2 py-1 border-r border-[#3C3C3C] text-center text-text-muted group-hover:bg-accent/10 transition-colors">
-                  {index + 1}
-                </td>
-                {row.getVisibleCells().map(cell => (
-                  <td 
-                    key={cell.id}
-                    className="px-3 py-1 border-r border-[#3C3C3C] truncate whitespace-nowrap"
-                  >
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
+          <tbody style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}>
+            {virtualizer.getVirtualItems().map(virtualRow => {
+              const row = rows[virtualRow.index];
+              return (
+                <tr 
+                  key={row.id}
+                  className="hover:bg-accent/5 border-b border-[#2C2C2C] group transition-colors"
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    height: `${virtualRow.size}px`,
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                >
+                  <td className="px-2 py-1 border-r border-[#3C3C3C] text-center text-text-muted group-hover:bg-accent/10 transition-colors" style={{ width: 40 }}>
+                    {virtualRow.index + 1}
                   </td>
-                ))}
-              </tr>
-            ))}
+                  {row.getVisibleCells().map(cell => (
+                    <td 
+                      key={cell.id}
+                      className="px-3 py-1 border-r border-[#3C3C3C] truncate whitespace-nowrap"
+                    >
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

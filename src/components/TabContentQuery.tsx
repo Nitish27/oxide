@@ -1,6 +1,6 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Play, Clock, Database as DatabaseIcon } from 'lucide-react';
+import { Play, Square, Clock, Database as DatabaseIcon } from 'lucide-react';
 import { SQLEditor } from './SQLEditor';
 import { QueryResultsTable } from './QueryResultsTable';
 import { useDatabaseStore } from '../store/databaseStore';
@@ -18,6 +18,30 @@ export const TabContentQuery = ({ id, initialQuery = '', connectionId }: TabCont
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState<{ time: number; rows: number } | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const generationRef = useRef(0);
+  const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
+    };
+  }, []);
+
+  const startTimer = () => {
+    setElapsed(0);
+    elapsedTimerRef.current = setInterval(() => {
+      setElapsed(prev => prev + 100);
+    }, 100);
+  };
+
+  const stopTimer = () => {
+    if (elapsedTimerRef.current) {
+      clearInterval(elapsedTimerRef.current);
+      elapsedTimerRef.current = null;
+    }
+  };
 
   const handleQueryChange = (value: string | undefined) => {
     const newVal = value || '';
@@ -25,11 +49,26 @@ export const TabContentQuery = ({ id, initialQuery = '', connectionId }: TabCont
     updateTab(id, { query: newVal });
   };
 
-  const runQuery = useCallback(async () => {
-    if (!query.trim() || loading) return;
+  const stopQuery = useCallback(() => {
+    generationRef.current += 1;
+    setLoading(false);
+    stopTimer();
+    setError('Query cancelled by user');
+    setResults(null);
+    setStats(null);
+  }, []);
 
+  const runQuery = useCallback(async () => {
+    if (!query.trim()) return;
+    if (loading) {
+      stopQuery();
+      return;
+    }
+
+    const currentGen = ++generationRef.current;
     setLoading(true);
     setError(null);
+    startTimer();
     const start = performance.now();
 
     try {
@@ -37,6 +76,9 @@ export const TabContentQuery = ({ id, initialQuery = '', connectionId }: TabCont
         connectionId, 
         sql: query 
       });
+
+      // If generation changed (user clicked Stop), discard result
+      if (currentGen !== generationRef.current) return;
 
       if (result && result.columns) {
         setResults({ columns: result.columns, rows: result.rows });
@@ -58,14 +100,23 @@ export const TabContentQuery = ({ id, initialQuery = '', connectionId }: TabCont
         });
       }
     } catch (err: any) {
+      if (currentGen !== generationRef.current) return;
       console.error("[ERROR] Query execution failed:", err);
       setError(err.toString());
       setResults(null);
       setStats(null);
     } finally {
-      setLoading(false);
+      if (currentGen === generationRef.current) {
+        setLoading(false);
+        stopTimer();
+      }
     }
-  }, [query, connectionId, loading]);
+  }, [query, connectionId, loading, stopQuery]);
+
+  const formatElapsed = (ms: number) => {
+    if (ms < 1000) return `${ms}ms`;
+    return `${(ms / 1000).toFixed(1)}s`;
+  };
 
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-[#1e1e1e]">
@@ -73,16 +124,35 @@ export const TabContentQuery = ({ id, initialQuery = '', connectionId }: TabCont
       <div className="h-9 px-4 flex items-center gap-4 bg-[#2C2C2C] border-b border-[#1e1e1e] shrink-0">
         <button 
           onClick={runQuery}
-          disabled={loading}
-          className="flex items-center gap-1.5 px-3 py-1 bg-accent hover:bg-accent/90 text-white rounded text-[11px] font-bold transition-colors disabled:opacity-50"
+          className={`flex items-center gap-1.5 px-3 py-1 rounded text-[11px] font-bold transition-colors ${
+            loading 
+              ? 'bg-red-600 hover:bg-red-500 text-white' 
+              : 'bg-accent hover:bg-accent/90 text-white'
+          }`}
         >
-          <Play size={12} fill="currentColor" />
-          {loading ? 'RUNNING...' : 'RUN'}
+          {loading ? (
+            <>
+              <Square size={10} fill="currentColor" />
+              STOP
+            </>
+          ) : (
+            <>
+              <Play size={12} fill="currentColor" />
+              RUN
+            </>
+          )}
         </button>
+
+        {loading && (
+          <div className="flex items-center gap-1.5 text-[10px] text-yellow-400 font-mono animate-pulse">
+            <Clock size={12} />
+            <span>{formatElapsed(elapsed)}</span>
+          </div>
+        )}
         
         <div className="flex-1" />
 
-        {stats && (
+        {stats && !loading && (
           <div className="flex items-center gap-3 text-[10px] text-text-muted">
             <div className="flex items-center gap-1">
               <Clock size={12} />
@@ -113,8 +183,8 @@ export const TabContentQuery = ({ id, initialQuery = '', connectionId }: TabCont
           
           <div className="flex-1 overflow-auto relative">
             {error ? (
-              <div className="p-4 text-red-500 font-mono text-[11px] bg-red-500/5">
-                <span className="font-bold">Error:</span> {error}
+              <div className={`p-4 font-mono text-[11px] ${error === 'Query cancelled by user' ? 'text-yellow-400 bg-yellow-500/5' : 'text-red-500 bg-red-500/5'}`}>
+                <span className="font-bold">{error === 'Query cancelled by user' ? 'Cancelled:' : 'Error:'}</span> {error}
               </div>
             ) : results ? (
               <QueryResultsTable columns={results.columns} data={results.rows} />
