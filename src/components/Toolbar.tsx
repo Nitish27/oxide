@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { RefreshCw, Layout, Sidebar as SidebarIcon, Terminal, Save, RotateCcw, ChevronRight, Database, Server, Check, Search } from 'lucide-react';
-import { useDatabaseStore } from '../store/databaseStore';
+import { RefreshCw, Layout, Sidebar as SidebarIcon, Terminal, Save, RotateCcw, ChevronRight, Database, Server, Check, Search, X, Key, Loader2 } from 'lucide-react';
+import { useDatabaseStore, SavedConnection } from '../store/databaseStore';
 import { invoke } from '@tauri-apps/api/core';
 
 interface ToolbarProps {
@@ -37,8 +37,69 @@ export const Toolbar = ({
   const [connDropdownOpen, setConnDropdownOpen] = useState(false);
   const [dbDropdownOpen, setDbDropdownOpen] = useState(false);
   const [dbSearch, setDbSearch] = useState('');
+  const [switchError, setSwitchError] = useState<string | null>(null);
+  const [switchingId, setSwitchingId] = useState<string | null>(null);
+  const [passwordPrompt, setPasswordPrompt] = useState<{
+    visible: boolean;
+    connection: SavedConnection | null;
+    password: string;
+  }>({ visible: false, connection: null, password: '' });
   
   const connection = savedConnections.find(c => c.id === activeConnectionId);
+
+  // Handle switching to a different saved connection
+  const handleSwitchConnection = (conn: SavedConnection) => {
+    if (conn.id === activeConnectionId) {
+      setConnDropdownOpen(false);
+      return;
+    }
+    setSwitchError(null);
+    if (conn.type === 'Sqlite') {
+      performConnect(conn, null);
+    } else {
+      setConnDropdownOpen(false);
+      setPasswordPrompt({ visible: true, connection: conn, password: '' });
+    }
+  };
+
+  const performConnect = async (conn: SavedConnection, password: string | null) => {
+    setSwitchingId(conn.id);
+    setSwitchError(null);
+    setPasswordPrompt({ visible: false, connection: null, password: '' });
+    setConnDropdownOpen(false);
+    try {
+      const config = {
+        id: conn.id,
+        name: conn.name,
+        db_type: conn.type,
+        host: conn.host || null,
+        port: conn.port || null,
+        username: conn.username || null,
+        database: conn.database || null,
+        ssl_enabled: conn.ssl_enabled || false,
+        ssl_mode: conn.ssl_mode || 'prefer',
+        ssl_ca_path: conn.ssl_ca_path || null,
+        ssl_cert_path: conn.ssl_cert_path || null,
+        ssl_key_path: conn.ssl_key_path || null,
+        ssh_enabled: conn.ssh_enabled || false,
+        ssh_host: conn.ssh_host || null,
+        ssh_port: conn.ssh_port || null,
+        ssh_username: conn.ssh_username || null,
+        ssh_auth_method: conn.ssh_auth_method || 'password',
+        ssh_password: null,
+        ssh_private_key_path: conn.ssh_private_key_path || null,
+        environment: conn.environment || 'local',
+        color_tag: conn.color || 'blue',
+      };
+      await invoke('connect', { config, password });
+      setActiveConnection(conn.id);
+    } catch (err: any) {
+      console.error('Switch connection failed:', err);
+      setSwitchError(`Failed: ${err.toString()}`);
+    } finally {
+      setSwitchingId(null);
+    }
+  };
 
   // Fetch databases when connection is active
   useEffect(() => {
@@ -160,15 +221,17 @@ export const Toolbar = ({
                   {savedConnections.map(conn => (
                     <button
                       key={conn.id}
-                      onClick={() => {
-                        setActiveConnection(conn.id);
-                        setConnDropdownOpen(false);
-                      }}
-                      className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-accent hover:text-white text-left text-text-secondary transition-colors"
+                      disabled={switchingId === conn.id}
+                      onClick={() => handleSwitchConnection(conn)}
+                      className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-accent hover:text-white text-left text-text-secondary transition-colors disabled:opacity-50"
                     >
                       <div className={`w-2 h-2 rounded-full bg-${conn.color}-500`} />
                       <span className="flex-1 truncate">{conn.name}</span>
-                      {conn.id === activeConnectionId && <Check size={12} className="text-accent group-hover:text-white" />}
+                      {switchingId === conn.id ? (
+                        <Loader2 size={12} className="animate-spin" />
+                      ) : conn.id === activeConnectionId ? (
+                        <Check size={12} className="text-accent group-hover:text-white" />
+                      ) : null}
                     </button>
                   ))}
                   <div className="border-t border-[#3C3C3C] my-1" />
@@ -281,6 +344,67 @@ export const Toolbar = ({
           <Terminal size={14} />
         </button>
       </div>
+
+      {/* Password Prompt Modal for Switch Connection */}
+      {passwordPrompt.visible && passwordPrompt.connection && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100] flex items-center justify-center animate-in fade-in duration-200">
+          <div className="bg-[#1e1e1e] border border-[#333] rounded-lg shadow-2xl w-[380px] animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between p-4 border-b border-[#333]">
+              <div className="flex items-center gap-2">
+                <Key size={14} className="text-accent" />
+                <span className="text-sm font-semibold text-white">Enter Password</span>
+              </div>
+              <button 
+                onClick={() => setPasswordPrompt({ visible: false, connection: null, password: '' })}
+                className="text-gray-400 hover:text-white transition-colors"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <p className="text-[12px] text-text-muted">
+                Enter password for <span className="text-white font-medium">{passwordPrompt.connection.name}</span>
+              </p>
+              {switchError && (
+                <div className="p-2 bg-red-500/10 border border-red-500/30 rounded text-red-400 text-[11px]">
+                  {switchError}
+                </div>
+              )}
+              <input 
+                type="password"
+                autoFocus
+                placeholder="Password"
+                value={passwordPrompt.password}
+                onChange={(e) => setPasswordPrompt(prev => ({ ...prev, password: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && passwordPrompt.connection) {
+                    performConnect(passwordPrompt.connection, passwordPrompt.password || null);
+                  }
+                }}
+                className="w-full bg-[#252525] border border-[#333] rounded px-3 py-2 text-sm text-white focus:border-accent focus:outline-none"
+              />
+            </div>
+            <div className="p-4 bg-[#1a1a1a] border-t border-[#333] flex justify-end gap-3">
+              <button 
+                onClick={() => setPasswordPrompt({ visible: false, connection: null, password: '' })}
+                className="px-4 py-1.5 text-xs text-gray-400 hover:bg-[#2a2a2a] rounded transition-colors"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={() => {
+                  if (passwordPrompt.connection) {
+                    performConnect(passwordPrompt.connection, passwordPrompt.password || null);
+                  }
+                }}
+                className="px-6 py-1.5 text-xs bg-accent text-white font-bold rounded hover:bg-accent/90 transition-all"
+              >
+                Connect
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
