@@ -12,6 +12,10 @@ pub enum DatabaseType {
     Sqlite,
 }
 
+use std::collections::HashMap;
+use tokio_util::sync::CancellationToken;
+use tokio::sync::Mutex;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ConnectionConfig {
     pub id: Uuid,
@@ -53,6 +57,8 @@ pub struct QueryResult {
     pub affected_rows: u64,
     pub execution_time_ms: u64,
     pub total_count: Option<u64>,
+    pub page: Option<u32>,
+    pub page_size: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -97,4 +103,25 @@ pub struct TableStructure {
 
 pub struct AppState {
     pub connection_manager: Arc<connection_manager::ConnectionManager>,
+    pub active_queries: Arc<Mutex<HashMap<Uuid, CancellationToken>>>,
 }
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamingMetadata {
+    pub query_id: Uuid,
+    pub columns: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamingBatch {
+    pub query_id: Uuid,
+    pub rows: Vec<Vec<serde_json::Value>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct StreamingComplete {
+    pub query_id: Uuid,
+    pub execution_time_ms: u64,
+    pub total_rows: u64,
+}
+

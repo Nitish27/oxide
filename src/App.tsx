@@ -10,6 +10,7 @@ import { ConnectionModal } from "./components/ConnectionModal";
 import { DatabaseSelectorModal } from "./components/DatabaseSelectorModal";
 import { ObjectDetails } from "./components/ObjectDetails";
 import { useEffect } from "react";
+import { Group, Panel, Separator } from 'react-resizable-panels';
 
 function App() {
   const activeConnectionId = useDatabaseStore((state) => state.activeConnectionId);
@@ -56,50 +57,88 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [activeConnectionId, setShowDatabaseSelector]);
   
-  // Find the active tab to render its content
-  const activeTab = tabs.find(t => t.id === activeTabId);
+  const sidebarVisible = activePanels.sidebar;
+  const rightVisible = activePanels.right;
 
   return (
     <div className="flex h-screen w-full bg-[#1e1e1e] text-[#cccccc] overflow-hidden font-sans">
       {!activeConnectionId ? (
         <WelcomeScreen />
       ) : (
-        <>
-          {activePanels.sidebar && <Sidebar />}
+        <Group 
+          orientation="horizontal" 
+          id="main-layout" 
+          autoSaveId="oxide-main-layout-v3"
+          className="flex-1 h-full w-full bg-[#1e1e1e] text-[#cccccc] overflow-hidden font-sans"
+        >
+          {/* Left Sidebar - order=1 */}
+          {sidebarVisible && (
+            <Panel 
+              defaultSize={20} 
+              minSize={15} 
+              id="sidebar-panel" 
+              order={1} 
+              className="h-full flex flex-col"
+            >
+              <Sidebar />
+            </Panel>
+          )}
           
-          <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-            <Toolbar 
-              onRefresh={triggerRefresh}
-              onCommit={() => console.log('Commit active tab')}
-              onDiscard={() => console.log('Discard active tab')}
-              pendingChangesCount={0} 
-            />
-            
-            <TabManager />
+          {sidebarVisible && (
+            <Separator
+              id="sidebar-resizer"
+              className="relative flex items-center justify-center transition-colors group w-[2px] mx-[-1px] cursor-col-resize z-50 hover:bg-accent/40 hover:w-[4px] hover:mx-[-2px] active:bg-accent active:w-[4px] active:mx-[-2px] bg-[#1e1e1e]"
+            >
+              <div className="absolute bg-[#3C3C3C] group-hover:bg-accent transition-colors w-[1px] h-full" />
+            </Separator>
+          )}
+          
+          {/* Main Workspace - order=2 */}
+          <Panel 
+            defaultSize={60} 
+            minSize={30} 
+            id="workspace-panel" 
+            order={2}
+            className="flex flex-col min-w-0 overflow-hidden relative"
+          >
+            <div className="flex flex-col h-full w-full overflow-hidden">
+              <Toolbar 
+                onRefresh={triggerRefresh}
+                onCommit={() => console.log('Commit active tab')}
+                onDiscard={() => console.log('Discard active tab')}
+                pendingChangesCount={0} 
+              />
+              
+              <TabManager />
 
-            {/* Workspace Content */}
-            <div className="flex-1 flex overflow-hidden relative">
-              <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-                <div className="flex-1 overflow-hidden relative">
-                  {activeTab ? (
-                    <div className="h-full flex flex-col">
-                      {/* Content based on tab type */}
-                      {activeTab.type === 'table' && (
-                        <TabContentTable 
-                          key={activeTab.id} // Important for state isolation
-                          tableName={activeTab.tableName!} 
-                          connectionId={activeTab.connectionId} 
-                        />
-                      )}
-                      {activeTab.type === 'query' && (
-                        <TabContentQuery 
-                          key={activeTab.id}
-                          id={activeTab.id}
-                          initialQuery={activeTab.query}
-                          connectionId={activeTab.connectionId}
-                        />
-                      )}
-                    </div>
+              <div className="flex-1 overflow-hidden relative">
+                <div className="h-full w-full flex flex-col overflow-hidden">
+                  {tabs.length > 0 ? (
+                    (() => {
+                      const activeTab = tabs.find(t => t.id === activeTabId);
+                      if (!activeTab) return null;
+
+                      return (
+                        <div className="h-full flex flex-col flex-1 min-h-0 overflow-hidden">
+                          {activeTab.type === 'table' && (
+                            <TabContentTable 
+                              key={activeTab.id}
+                              id={activeTab.id}
+                              tableName={activeTab.tableName || ''} 
+                              connectionId={activeTab.connectionId} 
+                            />
+                          )}
+                          {activeTab.type === 'query' && (
+                            <TabContentQuery 
+                              key={activeTab.id}
+                              id={activeTab.id}
+                              initialQuery={activeTab.query}
+                              connectionId={activeTab.connectionId}
+                            />
+                          )}
+                        </div>
+                      );
+                    })()
                   ) : (
                     <div className="flex flex-col items-center justify-center h-full text-text-muted select-none gap-4">
                       <div className="flex flex-col items-center gap-2 opacity-50">
@@ -112,30 +151,44 @@ function App() {
                     </div>
                   )}
                 </div>
-
-                {/* Bottom Console Panel */}
-                {activePanels.console && (
-                  <div className="h-48 border-t border-[#1e1e1e] bg-[#1a1a1a] flex flex-col animate-in slide-in-from-bottom-2 duration-200">
-                    <div className="px-3 py-1 bg-[#2C2C2C] text-[10px] font-bold text-text-muted uppercase tracking-wider flex justify-between items-center">
-                      <span>Console / SQL Log</span>
-                      <button onClick={() => useDatabaseStore.getState().togglePanel('console')} className="hover:text-white transition-colors">Close</button>
-                    </div>
-                    <div className="flex-1 p-3 font-mono text-[12px] opacity-70 overflow-auto">
-                      <p className="text-[#6A9955]">-- Ready. Waiting for queries...</p>
-                    </div>
-                  </div>
-                )}
               </div>
 
-              {/* Right Panel */}
-              {activePanels.right && (
-                <div className="w-64 border-l border-[#1e1e1e] bg-[#252526] flex flex-col animate-in slide-in-from-right-2 duration-200">
-                   <ObjectDetails />
+              {activePanels.console && (
+                <div className="h-48 border-t border-[#1e1e1e] bg-[#1a1a1a] flex flex-col animate-in slide-in-from-bottom-2 duration-200 shrink-0">
+                  <div className="px-3 py-1 bg-[#2C2C2C] text-[10px] font-bold text-text-muted uppercase tracking-wider flex justify-between items-center">
+                    <span>Console / SQL Log</span>
+                    <button onClick={() => useDatabaseStore.getState().togglePanel('console')} className="hover:text-white transition-colors">Close</button>
+                  </div>
+                  <div className="flex-1 p-3 font-mono text-[12px] opacity-70 overflow-auto">
+                    <p className="text-[#6A9955]">-- Ready. Waiting for queries...</p>
+                  </div>
                 </div>
               )}
             </div>
-          </div>
-        </>
+          </Panel>
+
+          {/* Right Panel - order=3 */}
+          {rightVisible && (
+            <Separator
+              id="right-resizer"
+              className="relative flex items-center justify-center transition-colors group w-[2px] mx-[-1px] cursor-col-resize z-50 hover:bg-accent/40 hover:w-[4px] hover:mx-[-2px] active:bg-accent active:w-[4px] active:mx-[-2px] bg-[#1e1e1e]"
+            >
+              <div className="absolute bg-[#3C3C3C] group-hover:bg-accent transition-colors w-[1px] h-full" />
+            </Separator>
+          )}
+          
+          {rightVisible && (
+            <Panel 
+              defaultSize={20} 
+              minSize={15} 
+              id="object-details-panel" 
+              order={3}
+              className="h-full flex flex-col"
+            >
+              <ObjectDetails />
+            </Panel>
+          )}
+        </Group>
       )}
 
       <ConnectionModal open={showConnectionModal} onOpenChange={setShowConnectionModal} />

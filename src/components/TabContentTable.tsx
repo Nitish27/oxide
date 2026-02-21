@@ -11,16 +11,16 @@ import { TabContentStructure } from './TabContentStructure';
 import { ExportModal } from './ExportModal';
 
 interface TabContentTableProps {
+  id: string;
   tableName: string;
   connectionId: string;
 }
 
-export const TabContentTable = ({ tableName, connectionId }: TabContentTableProps) => {
+export const TabContentTable = ({ id, tableName, connectionId }: TabContentTableProps) => {
   const { 
     refreshTrigger, 
     triggerRefresh, 
     tabs, 
-    activeTabId, 
     setSelectedRow, 
     updateTab, 
     toggleFilterBar,
@@ -30,12 +30,12 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
     addToHistory,
     activeDatabase
   } = useDatabaseStore();
-  const activeTab = tabs.find(t => t.id === activeTabId);
-  const [tableData, setTableData] = useState<any[][]>([]);
-  const [tableColumns, setTableColumns] = useState<string[]>([]);
+  const activeTab = tabs.find(t => t.id === id);
+  const [tableData, setTableData] = useState<any[][]>(activeTab?.rows || []);
+  const [tableColumns, setTableColumns] = useState<string[]>(activeTab?.columns || []);
   const [loading, setLoading] = useState(false);
   const mutations = useTableMutations();
-  const [executionTime, setExecutionTime] = useState<number | undefined>();
+  const [executionTime, setExecutionTime] = useState<number | undefined>(activeTab?.stats?.time);
   const [pkColumn, setPkColumn] = useState<string | undefined>();
   const [showExportModal, setShowExportModal] = useState(false);
   const [commitError, setCommitError] = useState<string | null>(null);
@@ -106,11 +106,16 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
                 });
 
                 // Update store
-                if (activeTabId) {
-                  updateTab(activeTabId, {
+                if (id) {
+                  updateTab(id, {
                     columns: result.columns,
                     rows: result.rows,
-                    totalRows: count
+                    totalRows: count,
+                    stats: {
+                      time: result.execution_time_ms || 0,
+                      rows: result.rows.length,
+                      totalRows: count
+                    }
                   });
                 }
             }
@@ -162,17 +167,17 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
   };
 
   const handlePageChange = (direction: 'next' | 'prev') => {
-    if (!activeTabId || !activeTab) return;
+    if (!id || !activeTab) return;
     const currentOffset = activeTab.offset || 0;
     const pageSize = activeTab.pageSize || 100;
     const newOffset = direction === 'next' ? currentOffset + pageSize : Math.max(0, currentOffset - pageSize);
     if (newOffset !== currentOffset) {
-      updateTab(activeTabId, { offset: newOffset });
+      updateTab(id, { offset: newOffset });
     }
   };
 
   const handleSort = (column: string) => {
-    if (!activeTabId) return;
+    if (!id) return;
     const currentSort = activeTab?.sortConfig;
     
     let newConfig: SortConfig;
@@ -182,14 +187,14 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
         newConfig = { column, direction: 'DESC' };
       } else {
         // Clear sort after DESC
-        setSortConfig(activeTabId, { column: null, direction: 'ASC' });
+        setSortConfig(id, { column: null, direction: 'ASC' });
         return;
       }
     } else {
       // New column, start with ASC
       newConfig = { column, direction: 'ASC' };
     }
-    setSortConfig(activeTabId, newConfig);
+    setSortConfig(id, newConfig);
   };
 
   // Handle adding a new row
@@ -225,9 +230,9 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-background overflow-hidden relative">
       <div className="flex-1 overflow-hidden flex flex-col">
-        {activeTab?.isFilterVisible && activeTabId && (
+        {activeTab?.isFilterVisible && id && (
             <FilterBar 
-                tabId={activeTabId}
+                tabId={id}
                 columns={tableColumns}
                 filters={activeTab.filters || []}
             />
@@ -244,8 +249,8 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
                   mutations={mutations}
                   selectedRowIndex={activeTab?.selectedRowIndex}
                   onRowClick={(index) => {
-                  if (activeTabId) {
-                      setSelectedRow(activeTabId, index);
+                  if (id) {
+                      setSelectedRow(id, index);
                   }
                   }}
                   sortConfig={activeTab?.sortConfig}
@@ -259,35 +264,35 @@ export const TabContentTable = ({ tableName, connectionId }: TabContentTableProp
           <TabContentStructure 
             tableName={tableName} 
             connectionId={connectionId} 
-            tabId={activeTabId || ''} 
+            tabId={id || ''} 
           />
         )}
       </div>
 
       {/* Column Visibility Popover */}
-      {activeTab?.isColumnsPopoverVisible && activeTabId && (
+      {activeTab?.isColumnsPopoverVisible && id && (
         <div className="absolute bottom-12 right-2 z-[60]">
           <ColumnVisibilityPopover
-            tabId={activeTabId}
+            tabId={id}
             columns={tableColumns}
             hiddenColumns={activeTab.hiddenColumns || []}
-            onClose={() => toggleColumnsPopover(activeTabId)}
+            onClose={() => toggleColumnsPopover(id)}
           />
         </div>
       )}
 
       <TableFooter 
         type={viewMode === 'structure' ? 'Structure' : 'Data'}
-        onTypeChange={(type) => activeTabId && setViewMode(activeTabId, type === 'Structure' ? 'structure' : 'data')}
+        onTypeChange={(type) => id && setViewMode(id, type === 'Structure' ? 'structure' : 'data')}
         onAddRow={viewMode === 'data' ? handleAddRow : undefined}
         offset={activeTab?.offset || 0}
         pageSize={activeTab?.pageSize || 100}
         totalRows={activeTab?.totalRows || 0}
         onPageChange={handlePageChange}
         executionTime={executionTime}
-        onToggleFilters={() => activeTabId && toggleFilterBar(activeTabId)}
+        onToggleFilters={() => id && toggleFilterBar(id)}
         isFiltersVisible={activeTab?.isFilterVisible}
-        onToggleColumns={() => activeTabId && toggleColumnsPopover(activeTabId)}
+        onToggleColumns={() => id && toggleColumnsPopover(id)}
         isColumnsVisible={activeTab?.isColumnsPopoverVisible}
         onExport={() => setShowExportModal(true)}
       />

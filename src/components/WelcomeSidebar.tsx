@@ -2,7 +2,12 @@ import { Twitter, Github, Facebook, Database, Cloud, Settings } from 'lucide-rea
 import { convertFileSrc } from '@tauri-apps/api/core';
 
 export const WelcomeSidebar = () => {
-  const logoPath = convertFileSrc("/Users/nitish/.gemini/antigravity/brain/e56c867c-ba4c-4ea0-a1b4-44c4f28c8754/oxide_db_logo_1768762959166.png");
+  let logoPath = "";
+  try {
+    logoPath = convertFileSrc("/Users/nitish/.gemini/antigravity/brain/e56c867c-ba4c-4ea0-a1b4-44c4f28c8754/oxide_db_logo_1768762959166.png");
+  } catch (e) {
+    console.error("Failed to convert logo path:", e);
+  }
 
   return (
     <div className="w-[280px] bg-[#1e1e1e] flex flex-col items-center py-12 px-6 border-r border-black/20 select-none">

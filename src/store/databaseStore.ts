@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
+import { v4 as uuidv4 } from 'uuid';
 
 export type TabType = 'table' | 'query' | 'structure';
 
@@ -63,8 +64,15 @@ export interface Tab {
   sortConfig?: SortConfig;
   hiddenColumns?: string[];
   isColumnsPopoverVisible?: boolean;
-  viewMode?: 'data' | 'structure';
+  viewMode?: 'data' | 'structure' | 'message';
   tableStructure?: TableStructure;
+  messages?: string[];
+  elapsedTime?: number;
+  stats?: {
+    time: number;
+    rows: number;
+    totalRows?: number;
+  } | null;
 }
 
 export interface HistoryItem {
@@ -110,8 +118,20 @@ const saveConnectionsToStorage = (connections: SavedConnection[]) => {
 // Helper to load connections from localStorage
 const loadConnectionsFromStorage = (): SavedConnection[] => {
   try {
-    return JSON.parse(localStorage.getItem('oxide_saved_connections') || '[]');
-  } catch {
+    const saved = localStorage.getItem('oxide_saved_connections');
+    return saved ? JSON.parse(saved) : [];
+  } catch (e) {
+    console.error('Failed to load connections:', e);
+    return [];
+  }
+};
+
+const loadHistoryFromStorage = (): HistoryItem[] => {
+  try {
+    const saved = localStorage.getItem('oxide_query_history');
+    return saved ? JSON.parse(saved) : [];
+  } catch (e) {
+    console.error('Failed to load history:', e);
     return [];
   }
 };
@@ -206,7 +226,7 @@ export const useDatabaseStore = create<DatabaseState>((set) => ({
   savedConnections: loadConnectionsFromStorage(),
   tabs: [],
   activeTabId: null,
-  queryHistory: JSON.parse(localStorage.getItem('oxide_query_history') || '[]'),
+  queryHistory: loadHistoryFromStorage(),
   refreshTrigger: 0,
   databases: [],
   showConnectionModal: false,
@@ -319,7 +339,7 @@ export const useDatabaseStore = create<DatabaseState>((set) => ({
       }
     }
 
-    const id = Math.random().toString(36).substring(7);
+    const id = uuidv4();
     const newTab: Tab = { 
       ...tabData, 
       id,
@@ -332,7 +352,7 @@ export const useDatabaseStore = create<DatabaseState>((set) => ({
     return { 
       tabs: [...state.tabs, newTab], 
       activeTabId: id,
-      activeTable: tabData.tableName || state.activeTable
+      activeTable: tabData.type === 'table' ? (tabData.tableName || state.activeTable) : null
     };
   }),
 

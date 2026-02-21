@@ -23,47 +23,48 @@ export const ObjectDetails = () => {
 
   useEffect(() => {
     const fetchMetadata = async () => {
-      if (activeTab?.type === 'table' && activeTab.tableName && connectionId) {
-        try {
-          const result = await invoke<TableMetadata>('get_table_metadata', {
-            connectionId,
-            tableName: activeTab.tableName
-          });
-          setMetadata(result);
-        } catch (err) {
-          console.error("Failed to fetch metadata:", err);
-          setMetadata(null);
-        }
-      } else {
+      // Early exit if missing requirements
+      if (!activeTab || activeTab.type !== 'table' || !activeTab.tableName || !connectionId) {
+        setMetadata(null);
+        return;
+      }
+
+      try {
+        const result = await invoke<TableMetadata>('get_table_metadata', {
+          connectionId,
+          tableName: activeTab.tableName
+        });
+        setMetadata(result);
+      } catch (err) {
+        console.error("Failed to fetch metadata:", err);
         setMetadata(null);
       }
     };
 
-    if (!activeTab?.selectedRowIndex && activeTab?.selectedRowIndex !== 0) {
+    if (activeTab?.type === 'table' && !activeTab?.selectedRowIndex && activeTab?.selectedRowIndex !== 0) {
       fetchMetadata();
     }
   }, [activeTab?.tableName, activeTab?.selectedRowIndex, connectionId, activeTab?.type]);
 
+  // If not a table tab, return null. This is the safest way to clear the right panel.
   if (!activeTab || activeTab.type !== 'table') {
-    return (
-      <div className="flex-1 flex flex-col bg-[#262626] border-l border-[#1e1e1e]">
-        <div className="p-4 text-center text-text-muted italic text-[11px] mt-10">
-          No table selected
-        </div>
-      </div>
-    );
+    return null;
   }
 
-  const isRowSelected = activeTab.selectedRowIndex !== null && activeTab.selectedRowIndex !== undefined;
-  const currentRow = isRowSelected && activeTab.rows ? activeTab.rows[activeTab.selectedRowIndex!] : null;
+  const isRowSelected = Boolean(activeTab.selectedRowIndex !== null && activeTab.selectedRowIndex !== undefined);
+  
+  // Safe row access
+  const currentRow = (isRowSelected && activeTab.rows && activeTab.selectedRowIndex !== undefined && activeTab.selectedRowIndex !== null && activeTab.selectedRowIndex < activeTab.rows.length) 
+    ? activeTab.rows[activeTab.selectedRowIndex] 
+    : null;
   
   const fields = useMemo(() => {
-    if (isRowSelected) {
-      return activeTab.columns?.map((name, i) => ({ 
+    if (isRowSelected && activeTab.columns) {
+      return activeTab.columns.map((name, i) => ({ 
         name, 
         value: currentRow ? currentRow[i] : undefined,
         originalIndex: i 
-      })) || [];
+      }));
     } else {
       return [
         { name: 'total_size', value: metadata?.total_size || '...', originalIndex: 0 },
@@ -128,7 +129,7 @@ export const ObjectDetails = () => {
                 <div className="flex justify-between items-center text-[10px] font-bold text-text-muted uppercase tracking-tighter">
                   <span>{field.name}</span>
                   <span className="opacity-0 group-hover:opacity-100 transition-opacity">
-                    {isRowSelected ? (activeTab.columns && activeTab.columns[field.originalIndex] === 'id' ? 'int8' : 'text') : 'stat'}
+                    {isRowSelected && activeTab.columns && activeTab.columns[field.originalIndex] ? (activeTab.columns[field.originalIndex] === 'id' ? 'int8' : 'text') : 'stat'}
                   </span>
                 </div>
                 <div className="text-[12px] text-[#cccccc] break-all">

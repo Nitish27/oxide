@@ -1,62 +1,77 @@
-import { useMemo, useRef } from 'react';
-import {
-  useReactTable,
-  getCoreRowModel,
-  flexRender,
-  createColumnHelper,
-} from '@tanstack/react-table';
-import { useVirtualizer } from '@tanstack/react-virtual';
+import { useRef, CSSProperties, useEffect } from 'react';
+import { List } from 'react-window';
 
 interface QueryResultsTableProps {
   columns: string[];
   data: any[][];
+  onReachBottom?: () => void;
+  isLoadingMore?: boolean;
 }
 
 const ROW_HEIGHT = 28;
+const COLUMN_WIDTH = 150;
+const INDEX_COLUMN_WIDTH = 40;
 
-export const QueryResultsTable = ({ columns: columnNames, data }: QueryResultsTableProps) => {
-  const parentRef = useRef<HTMLDivElement>(null);
+export const QueryResultsTable = ({ columns, data, onReachBottom, isLoadingMore }: QueryResultsTableProps) => {
+  const headerRef = useRef<HTMLDivElement>(null);
 
-  const columns = useMemo(() => {
-    const helper = createColumnHelper<any[]>();
-    return columnNames.map((name, index) => 
-      helper.accessor(row => row[index], {
-        id: name,
-        header: name,
-        cell: info => {
-          const value = info.getValue();
-          return (
-            <span className="cursor-text">
-              {value === null ? (
-                <span className="text-text-muted italic">NULL</span>
-              ) : typeof value === 'boolean' ? (
-                value ? 'true' : 'false'
-              ) : (
-                String(value)
-              )}
-            </span>
-          );
-        },
-      })
+  const handleScroll = (e: any) => {
+    if (headerRef.current) {
+      headerRef.current.scrollLeft = e.scrollOffset || (e.target as any)?.scrollLeft || 0;
+    }
+  };
+
+  useEffect(() => {
+    // Try to attach native scroll listener if `react-window` inner element exposes it
+    const el = document.querySelector('.react-window-list');
+    if (el) {
+      const nativeScroll = (e: Event) => {
+        if (headerRef.current) {
+          headerRef.current.scrollLeft = (e.currentTarget as HTMLDivElement).scrollLeft;
+        }
+      };
+      el.addEventListener('scroll', nativeScroll);
+      return () => el.removeEventListener('scroll', nativeScroll);
+    }
+  }, []);
+
+  const formatValue = (value: any) => {
+    if (value === null) return <span className="text-text-muted italic opacity-40">NULL</span>;
+    if (typeof value === 'boolean') return <span className="text-blue-400 font-medium">{value ? 'true' : 'false'}</span>;
+    return <span className="truncate text-[#ccc]">{String(value)}</span>;
+  };
+
+  const totalWidth = INDEX_COLUMN_WIDTH + columns.length * COLUMN_WIDTH;
+
+  const Row = ({ index, style }: { index: number; style: CSSProperties }) => {
+    const row = data[index];
+    if (!row) return null;
+
+    return (
+      <div 
+        style={{ ...style, width: totalWidth, minWidth: '100%' }} 
+        className="flex border-b border-[#2C2C2C] hover:bg-accent/5 transition-colors group cursor-default"
+      >
+        <div 
+          className="sticky left-0 z-10 bg-[#1e1e1e] shrink-0 border-r border-[#3C3C3C] text-[10px] text-text-muted flex items-center justify-center group-hover:bg-accent/10 shadow-[2px_0_5px_rgba(0,0,0,0.2)]"
+          style={{ width: INDEX_COLUMN_WIDTH }}
+        >
+          {index + 1}
+        </div>
+        {row.map((val, i) => (
+          <div 
+            key={i} 
+            className="shrink-0 px-3 border-r border-[#3C3C3C] flex items-center text-[11px] truncate"
+            style={{ width: COLUMN_WIDTH }}
+          >
+            {formatValue(val)}
+          </div>
+        ))}
+      </div>
     );
-  }, [columnNames]);
+  };
 
-  const table = useReactTable({
-    data,
-    columns,
-    getCoreRowModel: getCoreRowModel(),
-  });
-
-  const { rows } = table.getRowModel();
-
-  const virtualizer = useVirtualizer({
-    count: rows.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => ROW_HEIGHT,
-    overscan: 20,
-  });
-
-  if (columnNames.length === 0) {
+  if (columns.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center text-text-muted text-xs">
         No results to display
@@ -65,56 +80,54 @@ export const QueryResultsTable = ({ columns: columnNames, data }: QueryResultsTa
   }
 
   return (
-    <div className="flex flex-col h-full bg-[#1e1e1e]">
-      <div ref={parentRef} className="flex-1 overflow-auto">
-        <table className="w-full border-collapse text-[11px]" style={{ minWidth: 'max-content' }}>
-          <thead className="sticky top-0 z-10 bg-[#2C2C2C] border-b border-[#3C3C3C] shadow-sm">
-            {table.getHeaderGroups().map(headerGroup => (
-              <tr key={headerGroup.id}>
-                <th className="w-10 px-2 py-1.5 border-r border-[#3C3C3C] text-text-muted font-normal text-center">#</th>
-                {headerGroup.headers.map(header => (
-                  <th 
-                    key={header.id}
-                    className="px-3 py-1.5 text-left font-semibold text-text-secondary border-r border-[#3C3C3C] min-w-[120px] truncate"
-                  >
-                    {flexRender(header.column.columnDef.header, header.getContext())}
-                  </th>
-                ))}
-              </tr>
-            ))}
-          </thead>
-          <tbody style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}>
-            {virtualizer.getVirtualItems().map(virtualRow => {
-              const row = rows[virtualRow.index];
-              return (
-                <tr 
-                  key={row.id}
-                  className="hover:bg-accent/5 border-b border-[#2C2C2C] group transition-colors"
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    width: '100%',
-                    height: `${virtualRow.size}px`,
-                    transform: `translateY(${virtualRow.start}px)`,
-                  }}
-                >
-                  <td className="px-2 py-1 border-r border-[#3C3C3C] text-center text-text-muted group-hover:bg-accent/10 transition-colors" style={{ width: 40 }}>
-                    {virtualRow.index + 1}
-                  </td>
-                  {row.getVisibleCells().map(cell => (
-                    <td 
-                      key={cell.id}
-                      className="px-3 py-1 border-r border-[#3C3C3C] truncate whitespace-nowrap"
-                    >
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </td>
-                  ))}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+    <div className="flex flex-col h-full bg-[#1e1e1e] overflow-hidden">
+      {/* Header */}
+      <div 
+        ref={headerRef}
+        className="overflow-hidden bg-[#2C2C2C] border-b border-[#3C3C3C] shrink-0"
+      >
+        <div className="flex" style={{ width: totalWidth, minWidth: '100%' }}>
+          <div 
+            className="sticky left-0 z-20 bg-[#2C2C2C] shrink-0 border-r border-[#3C3C3C] h-8 flex items-center justify-center text-text-muted text-[10px]"
+            style={{ width: INDEX_COLUMN_WIDTH }}
+          >
+            #
+          </div>
+          {columns.map((name) => (
+            <div 
+              key={name}
+              className="shrink-0 px-3 border-r border-[#3C3C3C] h-8 flex items-center text-[11px] font-semibold text-text-secondary truncate"
+              style={{ width: COLUMN_WIDTH }}
+            >
+              {name}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Body with Virtualization */}
+      <div className="flex-1 relative min-h-0 bg-[#1e1e1e]">
+        <List
+          rowCount={data.length}
+          rowHeight={ROW_HEIGHT}
+          rowComponent={Row as any}
+          rowProps={{}}
+          onScroll={handleScroll}
+          onRowsRendered={({ stopIndex }: any) => {
+            if (onReachBottom && stopIndex >= data.length - 20) {
+              onReachBottom();
+            }
+          }}
+          className="react-window-list overflow-auto"
+          style={{ width: '100%', height: '100%' }}
+        />
+        
+        {isLoadingMore && (
+          <div className="absolute bottom-4 right-4 bg-accent/80 text-white px-3 py-1 rounded-full text-[10px] animate-pulse flex items-center gap-2">
+            <span className="w-1.5 h-1.5 bg-white rounded-full animate-ping"></span>
+            Loading more...
+          </div>
+        )}
       </div>
     </div>
   );

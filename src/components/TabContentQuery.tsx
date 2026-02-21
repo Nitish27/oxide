@@ -1,9 +1,10 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { Play, Square, Clock, Database as DatabaseIcon, ChevronDown } from 'lucide-react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { Play, Square, Clock, Database as DatabaseIcon, Wand2, List, MessageSquare } from 'lucide-react';
 import { SQLEditor } from './SQLEditor';
 import { QueryResultsTable } from './QueryResultsTable';
 import { useDatabaseStore } from '../store/databaseStore';
+import { format } from 'sql-formatter';
+import { useStreamingQuery } from '../hooks/useStreamingQuery';
 
 interface TabContentQueryProps {
   id: string;
@@ -11,42 +12,44 @@ interface TabContentQueryProps {
   connectionId: string;
 }
 
-const ROW_LIMITS = [
-  { label: '100', value: 100 },
-  { label: '500', value: 500 },
-  { label: '1,000', value: 1000 },
-  { label: '5,000', value: 5000 },
-  { label: '10,000', value: 10000 },
-  { label: 'No limit', value: 0 },
-];
+type ViewMode = 'data' | 'message';
 
 export const TabContentQuery = ({ id, initialQuery = '', connectionId }: TabContentQueryProps) => {
-  const { updateTab, addToHistory, activeDatabase } = useDatabaseStore();
-  const [query, setQuery] = useState(initialQuery);
-  const [results, setResults] = useState<{ columns: string[]; rows: any[][] } | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [stats, setStats] = useState<{ time: number; rows: number } | null>(null);
-  const [elapsed, setElapsed] = useState(0);
-  const [rowLimit, setRowLimit] = useState(1000);
-  const [limitDropdownOpen, setLimitDropdownOpen] = useState(false);
-  const generationRef = useRef(0);
+  const { tabs, updateTab, addToHistory, activeDatabase } = useDatabaseStore();
+  const tab = useMemo(() => tabs.find(t => t.id === id), [tabs, id]);
+
+  const [query, setQuery] = useState(tab?.query || initialQuery);
+  const [viewMode, setViewMode] = useState<ViewMode>((tab?.viewMode as ViewMode) || 'data');
+  const [messages, setMessages] = useState<string[]>(tab?.messages || []);
+  const [elapsed, setElapsed] = useState(tab?.elapsedTime || 0);
+  
+  const {
+    rows,
+    columns,
+    isLoading,
+    error,
+    stats: streamingStats,
+    runQuery,
+    cancelQuery
+  } = useStreamingQuery(connectionId, {
+    rows: tab?.rows,
+    columns: tab?.columns,
+    stats: tab?.stats
+  });
+
+  // Targeted sync back to store
+  useEffect(() => {
+    updateTab(id, { 
+      query, 
+      viewMode, 
+      messages, 
+      rows,
+      columns,
+      stats: streamingStats
+    });
+  }, [id, query, viewMode, messages, rows, columns, streamingStats]);
+
   const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Cleanup timer on unmount
-  useEffect(() => {
-    return () => {
-      if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
-    };
-  }, []);
-
-  // Close limit dropdown on outside click
-  useEffect(() => {
-    if (!limitDropdownOpen) return;
-    const handleClick = () => setLimitDropdownOpen(false);
-    window.addEventListener('click', handleClick);
-    return () => window.removeEventListener('click', handleClick);
-  }, [limitDropdownOpen]);
 
   const startTimer = () => {
     setElapsed(0);
@@ -62,200 +65,203 @@ export const TabContentQuery = ({ id, initialQuery = '', connectionId }: TabCont
     }
   };
 
+  useEffect(() => {
+    if (!isLoading) {
+      stopTimer();
+      updateTab(id, { elapsedTime: elapsed });
+    }
+  }, [isLoading, id, updateTab]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (elapsedTimerRef.current) clearInterval(elapsedTimerRef.current);
+    };
+  }, []);
+
   const handleQueryChange = (value: string | undefined) => {
     const newVal = value || '';
     setQuery(newVal);
-    updateTab(id, { query: newVal });
   };
 
-  // Inject LIMIT into a SELECT query if it doesn't already have one
-  const applyLimit = (sql: string, limit: number): string => {
-    if (limit === 0) return sql; // No limit
-    const trimmed = sql.trim().replace(/;$/, '');
-    // Only apply to SELECT queries that don't already have a LIMIT
-    if (!/^select/i.test(trimmed)) return sql;
-    if (/\blimit\s+\d+/i.test(trimmed)) return sql;
-    return `${trimmed} LIMIT ${limit}`;
-  };
-
-  const stopQuery = useCallback(() => {
-    generationRef.current += 1;
-    setLoading(false);
-    stopTimer();
-    setError('Query cancelled by user');
-    setResults(null);
-    setStats(null);
-  }, []);
-
-  const runQuery = useCallback(async () => {
-    if (!query.trim()) return;
-    if (loading) {
-      stopQuery();
-      return;
-    }
-
-    const currentGen = ++generationRef.current;
-    setLoading(true);
-    setError(null);
-    startTimer();
-    const start = performance.now();
-
-    const effectiveSql = applyLimit(query, rowLimit);
-
+  const beautifySql = () => {
     try {
-      const result = await invoke<any>('execute_query', { 
-        connectionId, 
-        sql: effectiveSql 
+      const formatted = format(query, {
+        language: 'sql',
+        keywordCase: 'upper',
       });
-
-      // If generation changed (user clicked Stop), discard result
-      if (currentGen !== generationRef.current) return;
-
-      if (result && result.columns) {
-        setResults({ columns: result.columns, rows: result.rows });
-        const time = result.execution_time_ms || Math.round(performance.now() - start);
-        const rowsCount = result.rows.length;
-        
-        setStats({ 
-          time, 
-          rows: rowsCount 
-        });
-
-        // Add to history
-        addToHistory({
-          sql: query,
-          connectionId,
-          database: activeDatabase || undefined,
-          executionTimeMs: time,
-          rowsAffected: rowsCount
-        });
-      }
-    } catch (err: any) {
-      if (currentGen !== generationRef.current) return;
-      console.error("[ERROR] Query execution failed:", err);
-      setError(err.toString());
-      setResults(null);
-      setStats(null);
-    } finally {
-      if (currentGen === generationRef.current) {
-        setLoading(false);
-        stopTimer();
-      }
+      handleQueryChange(formatted);
+    } catch (err) {
+      console.error('Failed to format SQL:', err);
     }
-  }, [query, connectionId, loading, stopQuery, rowLimit]);
+  };
+
+  const loadMore = useCallback(() => {}, []);
+
+  const runAll = useCallback(async () => {
+    if (!query.trim()) return;
+    
+    setMessages([`[${new Date().toLocaleTimeString()}] Executing query...`]);
+    setViewMode('data');
+    startTimer();
+    
+    await runQuery(query);
+  }, [query, runQuery]);
+
+  useEffect(() => {
+    if (error) {
+      setMessages(prev => [...prev, `[${new Date().toLocaleTimeString()}] Error: ${error}`]);
+      setViewMode('message');
+    }
+    if (streamingStats && !isLoading) {
+      setMessages(prev => [...prev, `[${new Date().toLocaleTimeString()}] Query complete: ${streamingStats.rows} rows fetched in ${streamingStats.time}ms`]);
+      
+      addToHistory({
+        sql: query,
+        connectionId,
+        database: activeDatabase || undefined,
+        executionTimeMs: streamingStats.time,
+        rowsAffected: streamingStats.rows
+      });
+    }
+  }, [error, streamingStats, isLoading, connectionId, activeDatabase, addToHistory, query]);
+
+  const runCurrent = useCallback((selectedText?: string) => {
+    const sqlToRun = selectedText || query;
+    if (!sqlToRun.trim()) return;
+    
+    setMessages([`[${new Date().toLocaleTimeString()}] Executing...`]);
+    setViewMode('data');
+    startTimer();
+    runQuery(sqlToRun);
+  }, [query, runQuery]);
 
   const formatElapsed = (ms: number) => {
     if (ms < 1000) return `${ms}ms`;
-    return `${(ms / 1000).toFixed(1)}s`;
+    return `${((ms / 1000)).toFixed(1)}s`;
   };
-
-  const currentLimitLabel = ROW_LIMITS.find(l => l.value === rowLimit)?.label || `${rowLimit}`;
 
   return (
     <div className="flex-1 flex flex-col min-h-0 bg-[#1e1e1e]">
       {/* Query Toolbar */}
       <div className="h-9 px-4 flex items-center gap-4 bg-[#2C2C2C] border-b border-[#1e1e1e] shrink-0">
+        <div className="flex items-center">
+          <button 
+            onClick={() => runAll()}
+            disabled={isLoading}
+            className={`flex items-center gap-1.5 px-3 py-1 rounded text-[11px] font-bold transition-colors ${
+              isLoading 
+                ? 'bg-[#3C3C3C] text-text-muted cursor-not-allowed' 
+                : 'bg-[#404040] text-text-primary hover:bg-[#4C4C4C]'
+            }`}
+          >
+            <Play size={14} className={isLoading ? 'text-text-muted' : 'text-green-500'} />
+            RUN
+          </button>
+        </div>
+
+        {isLoading && (
+          <button 
+            onClick={() => cancelQuery()}
+            className="flex items-center gap-1.5 px-3 py-1 bg-red-900/30 text-red-400 hover:bg-red-900/50 rounded text-[11px] font-bold transition-colors"
+          >
+            <Square size={12} fill="currentColor" />
+            STOP
+          </button>
+        )}
+
         <button 
-          onClick={runQuery}
-          className={`flex items-center gap-1.5 px-3 py-1 rounded text-[11px] font-bold transition-colors ${
-            loading 
-              ? 'bg-red-600 hover:bg-red-500 text-white' 
-              : 'bg-accent hover:bg-accent/90 text-white'
-          }`}
+          onClick={beautifySql}
+          className="flex items-center gap-1.5 px-2 py-1 text-text-muted hover:text-text-primary transition-colors text-[11px]"
+          title="Format SQL (Cmd+Shift+F)"
         >
-          {loading ? (
-            <>
-              <Square size={10} fill="currentColor" />
-              STOP
-            </>
-          ) : (
-            <>
-              <Play size={12} fill="currentColor" />
-              RUN
-            </>
-          )}
+          <Wand2 size={14} />
+          BEAUTIFY
         </button>
 
-        {loading && (
-          <div className="flex items-center gap-1.5 text-[10px] text-yellow-400 font-mono animate-pulse">
-            <Clock size={12} />
-            <span>{formatElapsed(elapsed)}</span>
-          </div>
-        )}
-        
         <div className="flex-1" />
-
-        {/* Row Limit Dropdown */}
-        <div className="relative">
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setLimitDropdownOpen(!limitDropdownOpen);
-            }}
-            className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-text-muted hover:bg-[#3C3C3C] transition-colors border border-[#3C3C3C]"
-          >
-            <span>{rowLimit === 0 ? 'No limit' : `Limit ${currentLimitLabel}`}</span>
-            <ChevronDown size={10} />
-          </button>
-          {limitDropdownOpen && (
-            <div className="absolute right-0 top-full mt-1 w-28 bg-[#2C2C2C] border border-[#3C3C3C] rounded-md shadow-xl overflow-hidden z-50">
-              {ROW_LIMITS.map(opt => (
-                <button
-                  key={opt.value}
-                  onClick={() => {
-                    setRowLimit(opt.value);
-                    setLimitDropdownOpen(false);
-                  }}
-                  className={`w-full text-left px-3 py-1.5 text-[11px] hover:bg-accent hover:text-white transition-colors ${
-                    rowLimit === opt.value ? 'text-accent font-bold' : 'text-text-secondary'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {stats && !loading && (
-          <div className="flex items-center gap-3 text-[10px] text-text-muted">
-            <div className="flex items-center gap-1">
-              <Clock size={12} />
-              <span>{stats.time}ms</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <DatabaseIcon size={12} />
-              <span>{stats.rows.toLocaleString()} rows</span>
-            </div>
-          </div>
-        )}
       </div>
 
-      {/* Editor & Results Split */}
-      <div className="flex-1 flex flex-col min-h-0">
-        <div className="flex-1 border-b border-[#3C3C3C] relative min-h-[100px]">
+      {/* Stable Flex Layout instead of nested Group to prevent library crashes */}
+      <div className="flex-1 flex flex-col min-h-0 relative overflow-hidden">
+        {/* Editor Area */}
+        <div className="flex-1 min-h-[100px] flex flex-col">
           <SQLEditor 
             value={query} 
-            onChange={handleQueryChange} 
-            onRun={runQuery}
+            onChange={handleQueryChange}
+            onRun={runCurrent}
+            onRunAll={runAll}
+            onCancel={cancelQuery}
           />
         </div>
-        
-        <div className="h-[40%] min-h-[150px] bg-[#1a1a1a] flex flex-col relative overflow-hidden">
-          <div className="px-3 py-1 bg-[#252526] text-[10px] font-bold text-text-muted uppercase tracking-wider border-b border-[#1e1e1e]">
-            Results
+
+        {/* Static Separator Line */}
+        <div className="h-[2px] w-full bg-[#1e1e1e] border-y border-[#3C3C3C] shrink-0" />
+
+        {/* Results Area */}
+        <div className="flex-1 min-h-[100px] flex flex-col">
+          <div className="h-8 px-4 flex items-center justify-between bg-[#2C2C2C] border-b border-[#1e1e1e] shrink-0">
+            <div className="flex gap-4">
+              <button 
+                onClick={() => setViewMode('data')}
+                className={`flex items-center gap-2 h-8 px-1 text-[11px] font-medium border-b-2 transition-colors ${
+                  viewMode === 'data' ? 'border-accent text-accent' : 'border-transparent text-text-muted hover:text-text-primary'
+                }`}
+              >
+                <DatabaseIcon size={14} />
+                DATA
+              </button>
+              <button 
+                onClick={() => setViewMode('message')}
+                className={`flex items-center gap-2 h-8 px-1 text-[11px] font-medium border-b-2 transition-colors ${
+                  viewMode === 'message' ? 'border-accent text-accent' : 'border-transparent text-text-muted hover:text-text-primary'
+                }`}
+              >
+                <MessageSquare size={14} />
+                MESSAGE
+              </button>
+            </div>
+
+            <div className="flex items-center gap-4 text-[10px] text-text-muted">
+              {isLoading ? (
+                <div className="flex items-center gap-1.5 text-accent animate-pulse font-medium">
+                  <Clock size={12} />
+                  {formatElapsed(elapsed)}
+                  <span className="ml-2 pl-2 border-l border-accent/20">⏳ Loading... {rows.length} rows</span>
+                </div>
+              ) : streamingStats ? (
+                <>
+                  <div className="flex items-center gap-1.5">
+                    <Clock size={12} />
+                    {streamingStats.time}ms
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <List size={12} />
+                    ✓ {rows.length} {streamingStats.totalRows ? `/ ${streamingStats.totalRows}` : ''} rows
+                  </div>
+                </>
+              ) : null}
+            </div>
           </div>
-          
-          <div className="flex-1 overflow-auto relative">
-            {error ? (
-              <div className={`p-4 font-mono text-[11px] ${error === 'Query cancelled by user' ? 'text-yellow-400 bg-yellow-500/5' : 'text-red-500 bg-red-500/5'}`}>
-                <span className="font-bold">{error === 'Query cancelled by user' ? 'Cancelled:' : 'Error:'}</span> {error}
-              </div>
-            ) : results ? (
-              <QueryResultsTable columns={results.columns} data={results.rows} />
+
+          <div className="flex-1 min-h-0 bg-[#1e1e1e]">
+            {viewMode === 'data' ? (
+              (rows.length > 0 || columns.length > 0) ? (
+                <QueryResultsTable 
+                  columns={columns} 
+                  data={rows} 
+                  onReachBottom={loadMore}
+                  isLoadingMore={isLoading}
+                />
+              ) : (
+                <div className="h-full flex flex-col items-center justify-center text-text-muted text-xs italic h-full p-4">
+                  <div>{isLoading ? 'Running query...' : 'Execute a query to see results'}</div>
+                  {error && <div className="text-red-400 mt-2 whitespace-pre-wrap">{error}</div>}
+                </div>
+              )
             ) : (
-              <div className="flex-1 flex items-center justify-center text-text-muted text-[11px] italic h-full">
-                {loading ? 'Executing query...' : 'Execute a query to see results'}
+              <div className="h-full overflow-auto p-4 font-mono text-xs text-text-secondary whitespace-pre-wrap select-text">
+                {messages.length > 0 ? messages.join('\n') : 'No messages'}
               </div>
             )}
           </div>

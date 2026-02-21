@@ -1,273 +1,236 @@
 use anyhow::{Result, anyhow};
-use crate::core::{QueryResult, TableMetadata, TableStructure, TableColumnStructure, TableIndexStructure, TableConstraintStructure, connection_manager::ConnectionManager, FilterConfig};
+use crate::core::{QueryResult, TableMetadata, TableStructure, TableColumnStructure, TableIndexStructure, TableConstraintStructure, connection_manager::ConnectionManager, FilterConfig, StreamingMetadata, StreamingBatch, StreamingComplete};
 use sqlx::{Column, Row, TypeInfo, ValueRef};
 use std::time::Instant;
 use uuid::Uuid;
 use serde_json::Value;
 use std::fs::File;
 use std::io::Write;
-
-// Macro to map rows without generic trait hell
-macro_rules! map_rows {
-    ($rows:expr, $duration:expr, Postgres) => {{
-        let mut columns = Vec::new();
-        let mut result_rows = Vec::new();
-
-        if let Some(first_row) = $rows.first() {
-            for col in first_row.columns() {
-                columns.push(col.name().to_string());
-            }
-        }
-
-        for row in $rows {
-            let mut result_row = Vec::new();
-            for i in 0..row.columns().len() {
-                let val: Value = if row.try_get_raw(i).map(|v| v.is_null()).unwrap_or(true) {
-                    Value::Null
-                } else {
-                    let type_name = row.column(i).type_info().name().to_lowercase();
-                    
-                    if type_name == "bool" || type_name == "boolean" || type_name == "bit" {
-                         if let Ok(b) = row.try_get::<bool, _>(i) { Value::Bool(b) }
-                         else { Value::Null }
-                    } else if type_name == "uuid" {
-                         if let Ok(u) = row.try_get::<uuid::Uuid, _>(i) { Value::String(u.to_string()) } else { Value::String("Invalid UUID".to_string()) }
-                    } else if type_name.contains("int") || type_name == "serial" || type_name == "year" {
-                         if let Ok(n) = row.try_get::<i64, _>(i) { 
-                             Value::Number(serde_json::Number::from(n)) 
-                         } else if let Ok(n) = row.try_get::<i32, _>(i) {
-                             Value::Number(serde_json::Number::from(n))
-                         } else if let Ok(n) = row.try_get::<i16, _>(i) {
-                             Value::Number(serde_json::Number::from(n))
-                         } else if let Ok(n) = row.try_get::<i8, _>(i) {
-                             Value::Number(serde_json::Number::from(n))
-                         } else {
-                             Value::String(format!("NumError({})", type_name))
-                         }
-                    } else if type_name.contains("float") || type_name == "real" || type_name == "double" || type_name == "numeric" || type_name == "decimal" {
-                         if let Ok(f) = row.try_get::<f64, _>(i) {
-                             serde_json::Number::from_f64(f).map(Value::Number).unwrap_or(Value::Null)
-                         } else if let Ok(f) = row.try_get::<f32, _>(i) {
-                             serde_json::Number::from_f64(f as f64).map(Value::Number).unwrap_or(Value::Null)
-                         } else if let Ok(d) = row.try_get::<rust_decimal::Decimal, _>(i) {
-                             Value::String(d.to_string())
-                         } else { 
-                             Value::Null 
-                         }
-                    } else if type_name_is_text(&type_name) {
-                         if let Ok(s) = row.try_get::<String, _>(i) { Value::String(s) } else { Value::String("".to_string()) }
-                    } else if type_name.contains("time") || type_name == "date" {
-                         if let Ok(dt) = row.try_get::<chrono::DateTime<chrono::Utc>, _>(i) {
-                            Value::String(dt.to_rfc3339())
-                         } else if let Ok(dt) = row.try_get::<chrono::NaiveDateTime, _>(i) {
-                            Value::String(dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                         } else if let Ok(dt) = row.try_get::<chrono::NaiveDate, _>(i) {
-                            Value::String(dt.to_string())
-                         } else if let Ok(t) = row.try_get::<chrono::NaiveTime, _>(i) {
-                            Value::String(t.to_string())
-                         } else {
-                            if let Ok(s) = row.try_get::<String, _>(i) { Value::String(s) } else { Value::String("Invalid Date".to_string()) }
-                         }
-                    } else if type_name.contains("bytea") {
-                         if let Ok(bytes) = row.try_get::<Vec<u8>, _>(i) {
-                            let hex_string: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
-                            Value::String(format!("0x{}", hex_string))
-                         } else {
-                            Value::String(format!("BinaryErr({})", type_name))
-                         }
-                    } else {
-                         if let Ok(s) = row.try_get::<String, _>(i) {
-                            Value::String(s)
-                         } else {
-                            Value::String(format!("Binary/Complex ({})", type_name))
-                         }
-                    }
-                };
-                result_row.push(val);
-            }
-            result_rows.push(result_row);
-        }
-
-        Ok(QueryResult {
-            columns,
-            rows: result_rows,
-            affected_rows: 0,
-            execution_time_ms: $duration,
-            total_count: None,
-        })
-    }};
-
-    ($rows:expr, $duration:expr, MySql) => {{
-        let mut columns = Vec::new();
-        let mut result_rows = Vec::new();
-
-        if let Some(first_row) = $rows.first() {
-            for col in first_row.columns() {
-                columns.push(col.name().to_string());
-            }
-        }
-
-        for row in $rows {
-            let mut result_row = Vec::new();
-            for i in 0..row.columns().len() {
-                let val: Value = if row.try_get_raw(i).map(|v| v.is_null()).unwrap_or(true) {
-                    Value::Null
-                } else {
-                    let type_name = row.column(i).type_info().name().to_lowercase();
-                    
-                     if type_name == "tinyint" && row.column(i).type_info().to_string().contains("TINYINT(1)") {
-                         // MySQL often treats TINYINT(1) as boolean
-                         if let Ok(b) = row.try_get::<bool, _>(i) { Value::Bool(b) }
-                         else if let Ok(v) = row.try_get::<i8, _>(i) { Value::Bool(v != 0) }
-                         else { Value::Null }
-                    } else if type_name.contains("int") || type_name == "serial" || type_name == "year" {
-                         if let Ok(n) = row.try_get::<i64, _>(i) { 
-                             Value::Number(serde_json::Number::from(n)) 
-                         } else if let Ok(n) = row.try_get::<i32, _>(i) {
-                             Value::Number(serde_json::Number::from(n))
-                         } else if let Ok(n) = row.try_get::<i16, _>(i) {
-                             Value::Number(serde_json::Number::from(n))
-                         } else if let Ok(n) = row.try_get::<i8, _>(i) {
-                             Value::Number(serde_json::Number::from(n))
-                         } else if let Ok(n) = row.try_get::<u64, _>(i) {
-                             Value::Number(serde_json::Number::from(n))
-                         } else if let Ok(n) = row.try_get::<u32, _>(i) {
-                             Value::Number(serde_json::Number::from(n))
-                         } else {
-                             Value::String(format!("NumError({})", type_name))
-                         }
-                    } else if type_name.contains("float") || type_name == "real" || type_name == "double" || type_name == "numeric" || type_name == "decimal" {
-                         if let Ok(f) = row.try_get::<f64, _>(i) {
-                             serde_json::Number::from_f64(f).map(Value::Number).unwrap_or(Value::Null)
-                         } else if let Ok(f) = row.try_get::<f32, _>(i) {
-                             serde_json::Number::from_f64(f as f64).map(Value::Number).unwrap_or(Value::Null)
-                         } else if let Ok(d) = row.try_get::<rust_decimal::Decimal, _>(i) {
-                             Value::String(d.to_string())
-                         } else { 
-                             Value::Null 
-                         }
-                    } else if type_name_is_text(&type_name) {
-                         if let Ok(s) = row.try_get::<String, _>(i) { Value::String(s) } else { Value::String("".to_string()) }
-                    } else if type_name.contains("time") || type_name == "date" || type_name == "timestamp" {
-                         if let Ok(dt) = row.try_get::<chrono::DateTime<chrono::Utc>, _>(i) {
-                            Value::String(dt.to_rfc3339())
-                         } else if let Ok(dt) = row.try_get::<chrono::NaiveDateTime, _>(i) {
-                            Value::String(dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                         } else if let Ok(dt) = row.try_get::<chrono::NaiveDate, _>(i) {
-                            Value::String(dt.to_string())
-                         } else if let Ok(t) = row.try_get::<chrono::NaiveTime, _>(i) {
-                            Value::String(t.to_string())
-                         } else {
-                            if let Ok(s) = row.try_get::<String, _>(i) { Value::String(s) } else { Value::String("Invalid Date".to_string()) }
-                         }
-                    } else if type_name.contains("blob") || type_name.contains("binary") {
-                         if let Ok(bytes) = row.try_get::<Vec<u8>, _>(i) {
-                            let hex_string: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
-                            if bytes.len() == 16 {
-                                if let Ok(u) = uuid::Uuid::from_slice(&bytes) {
-                                  Value::String(u.to_string())
-                                } else {
-                                  Value::String(format!("0x{}", hex_string))
-                                }
-                            } else {
-                                Value::String(format!("0x{}", hex_string))
-                            }
-                         } else {
-                            Value::String(format!("BinaryErr({})", type_name))
-                         }
-                    } else {
-                         if let Ok(s) = row.try_get::<String, _>(i) {
-                            Value::String(s)
-                         } else {
-                            Value::String(format!("Binary/Complex ({})", type_name))
-                         }
-                    }
-                };
-                result_row.push(val);
-            }
-            result_rows.push(result_row);
-        }
-        
-        Ok(QueryResult {
-            columns,
-            rows: result_rows,
-            affected_rows: 0,
-            execution_time_ms: $duration,
-            total_count: None,
-        })
-    }};
-
-    ($rows:expr, $duration:expr, Sqlite) => {{
-         let mut columns = Vec::new();
-        let mut result_rows = Vec::new();
-
-        if let Some(first_row) = $rows.first() {
-            for col in first_row.columns() {
-                columns.push(col.name().to_string());
-            }
-        }
-
-        for row in $rows {
-            let mut result_row = Vec::new();
-            for i in 0..row.columns().len() {
-                let val: Value = if row.try_get_raw(i).map(|v| v.is_null()).unwrap_or(true) {
-                    Value::Null
-                } else {
-                    let type_name = row.column(i).type_info().name().to_lowercase();
-                    
-                    if type_name == "bool" || type_name == "boolean" {
-                         if let Ok(b) = row.try_get::<bool, _>(i) { Value::Bool(b) }
-                         else { Value::Null }
-                    } else if type_name.contains("int") || type_name == "integer" {
-                         if let Ok(n) = row.try_get::<i64, _>(i) { 
-                             Value::Number(serde_json::Number::from(n)) 
-                         } else if let Ok(n) = row.try_get::<i32, _>(i) {
-                             Value::Number(serde_json::Number::from(n))
-                         } else if let Ok(n) = row.try_get::<i16, _>(i) {
-                             Value::Number(serde_json::Number::from(n))
-                         } else if let Ok(n) = row.try_get::<i8, _>(i) {
-                             Value::Number(serde_json::Number::from(n))
-                         } else {
-                             Value::String(format!("NumError({})", type_name))
-                         }
-                    } else if type_name.contains("float") || type_name == "real" || type_name == "double" {
-                         if let Ok(f) = row.try_get::<f64, _>(i) {
-                             serde_json::Number::from_f64(f).map(Value::Number).unwrap_or(Value::Null)
-                         } else { Value::Null }
-                    } else if type_name_is_text(&type_name) {
-                         if let Ok(s) = row.try_get::<String, _>(i) { Value::String(s) } else { Value::String("".to_string()) }
-                    } else if type_name.contains("blob") {
-                         if let Ok(bytes) = row.try_get::<Vec<u8>, _>(i) {
-                             let hex_string: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
-                             Value::String(format!("0x{}", hex_string))
-                         } else {
-                             Value::String("Blob Error".to_string())
-                         }
-                    } else {
-                         if let Ok(s) = row.try_get::<String, _>(i) {
-                            Value::String(s)
-                         } else {
-                            Value::String(format!("Binary/Complex ({})", type_name))
-                         }
-                    }
-                };
-                result_row.push(val);
-            }
-            result_rows.push(result_row);
-        }
-        
-        Ok(QueryResult {
-            columns,
-            rows: result_rows,
-            affected_rows: 0,
-            execution_time_ms: $duration,
-            total_count: None,
-        })
-    }};
-}
+use tokio_util::sync::CancellationToken;
+use tauri::Emitter;
+use tokio::time::{sleep, Duration};
 
 fn type_name_is_text(name: &str) -> bool {
     name == "text" || name.contains("char") || name == "name" || name == "citext" || name == "json" || name == "jsonb" || name == "enum"
+}
+
+fn wrap_pagination(sql: &str, limit: u32, offset: u32) -> String {
+    let trimmed = sql.trim();
+    if trimmed.to_uppercase().starts_with("SELECT") {
+        format!("SELECT * FROM ({}) AS __oxide_q LIMIT {} OFFSET {}", trimmed.trim_end_matches(';'), limit, offset)
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn wrap_count(sql: &str) -> String {
+    let trimmed = sql.trim();
+    if trimmed.to_uppercase().starts_with("SELECT") {
+        format!("SELECT COUNT(*) FROM ({}) AS __oxide_count_q", trimmed.trim_end_matches(';'))
+    } else {
+        "".to_string()
+    }
+}
+
+macro_rules! postgres_row_to_values {
+    ($row:expr) => {{
+        let mut result_row = Vec::new();
+        for i in 0..$row.columns().len() {
+            let val: Value = if $row.try_get_raw(i).map(|v| v.is_null()).unwrap_or(true) {
+                Value::Null
+            } else {
+                let type_name = $row.column(i).type_info().name().to_lowercase();
+                if type_name == "bool" || type_name == "boolean" || type_name == "bit" {
+                    if let Ok(b) = $row.try_get::<bool, _>(i) { Value::Bool(b) }
+                    else { Value::Null }
+                } else if type_name == "uuid" {
+                    if let Ok(u) = $row.try_get::<uuid::Uuid, _>(i) { Value::String(u.to_string()) } else { Value::String("Invalid UUID".to_string()) }
+                } else if type_name.contains("int") || type_name == "serial" || type_name == "year" {
+                    if let Ok(n) = $row.try_get::<i64, _>(i) { 
+                        Value::Number(serde_json::Number::from(n)) 
+                    } else if let Ok(n) = $row.try_get::<i32, _>(i) {
+                        Value::Number(serde_json::Number::from(n))
+                    } else if let Ok(n) = $row.try_get::<i16, _>(i) {
+                        Value::Number(serde_json::Number::from(n))
+                    } else if let Ok(n) = $row.try_get::<i8, _>(i) {
+                        Value::Number(serde_json::Number::from(n))
+                    } else {
+                        Value::String(format!("NumError({})", type_name))
+                    }
+                } else if type_name.contains("float") || type_name == "real" || type_name == "double" || type_name == "numeric" || type_name == "decimal" {
+                    if let Ok(f) = $row.try_get::<f64, _>(i) {
+                        serde_json::Number::from_f64(f).map(Value::Number).unwrap_or(Value::Null)
+                    } else if let Ok(f) = $row.try_get::<f32, _>(i) {
+                        serde_json::Number::from_f64(f as f64).map(Value::Number).unwrap_or(Value::Null)
+                    } else if let Ok(d) = $row.try_get::<rust_decimal::Decimal, _>(i) {
+                        Value::String(d.to_string())
+                    } else { 
+                        Value::Null 
+                    }
+                } else if type_name_is_text(&type_name) {
+                    if let Ok(s) = $row.try_get::<String, _>(i) { Value::String(s) } else { Value::String("".to_string()) }
+                } else if type_name.contains("time") || type_name == "date" {
+                    if let Ok(dt) = $row.try_get::<chrono::DateTime<chrono::Utc>, _>(i) {
+                        Value::String(dt.to_rfc3339())
+                    } else if let Ok(dt) = $row.try_get::<chrono::NaiveDateTime, _>(i) {
+                        Value::String(dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                    } else if let Ok(dt) = $row.try_get::<chrono::NaiveDate, _>(i) {
+                        Value::String(dt.to_string())
+                    } else if let Ok(t) = $row.try_get::<chrono::NaiveTime, _>(i) {
+                        Value::String(t.to_string())
+                    } else {
+                        if let Ok(s) = $row.try_get::<String, _>(i) { Value::String(s) } else { Value::String("Invalid Date".to_string()) }
+                    }
+                } else if type_name.contains("bytea") {
+                    if let Ok(bytes) = $row.try_get::<Vec<u8>, _>(i) {
+                        let hex_string: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+                        Value::String(format!("0x{}", hex_string))
+                    } else {
+                        Value::String(format!("BinaryErr({})", type_name))
+                    }
+                } else {
+                    if let Ok(s) = $row.try_get::<String, _>(i) {
+                        Value::String(s)
+                    } else {
+                        Value::String(format!("Binary/Complex ({})", type_name))
+                    }
+                }
+            };
+            result_row.push(val);
+        }
+        result_row
+    }};
+}
+
+macro_rules! mysql_row_to_values {
+    ($row:expr) => {{
+        let mut result_row = Vec::new();
+        for i in 0..$row.columns().len() {
+            let val: Value = if $row.try_get_raw(i).map(|v| v.is_null()).unwrap_or(true) {
+                Value::Null
+            } else {
+                let type_name = $row.column(i).type_info().name().to_lowercase();
+                if type_name == "tinyint" && $row.column(i).type_info().to_string().contains("TINYINT(1)") {
+                    if let Ok(b) = $row.try_get::<bool, _>(i) { Value::Bool(b) }
+                    else if let Ok(v) = $row.try_get::<i8, _>(i) { Value::Bool(v != 0) }
+                    else { Value::Null }
+                } else if type_name.contains("int") || type_name == "serial" || type_name == "year" {
+                    if let Ok(n) = $row.try_get::<i64, _>(i) { 
+                        Value::Number(serde_json::Number::from(n)) 
+                    } else if let Ok(n) = $row.try_get::<i32, _>(i) {
+                        Value::Number(serde_json::Number::from(n))
+                    } else if let Ok(n) = $row.try_get::<i16, _>(i) {
+                        Value::Number(serde_json::Number::from(n))
+                    } else if let Ok(n) = $row.try_get::<i8, _>(i) {
+                        Value::Number(serde_json::Number::from(n))
+                    } else if let Ok(n) = $row.try_get::<u64, _>(i) {
+                        Value::Number(serde_json::Number::from(n))
+                    } else if let Ok(n) = $row.try_get::<u32, _>(i) {
+                        Value::Number(serde_json::Number::from(n))
+                    } else {
+                        Value::String(format!("NumError({})", type_name))
+                    }
+                } else if type_name.contains("float") || type_name == "real" || type_name == "double" || type_name == "numeric" || type_name == "decimal" {
+                    if let Ok(f) = $row.try_get::<f64, _>(i) {
+                        serde_json::Number::from_f64(f).map(Value::Number).unwrap_or(Value::Null)
+                    } else if let Ok(f) = $row.try_get::<f32, _>(i) {
+                        serde_json::Number::from_f64(f as f64).map(Value::Number).unwrap_or(Value::Null)
+                    } else if let Ok(d) = $row.try_get::<rust_decimal::Decimal, _>(i) {
+                        Value::String(d.to_string())
+                    } else { 
+                        Value::Null 
+                    }
+                } else if type_name_is_text(&type_name) {
+                    if let Ok(s) = $row.try_get::<String, _>(i) { Value::String(s) } else { Value::String("".to_string()) }
+                } else if type_name.contains("time") || type_name == "date" || type_name == "timestamp" {
+                    if let Ok(dt) = $row.try_get::<chrono::DateTime<chrono::Utc>, _>(i) {
+                        Value::String(dt.to_rfc3339())
+                    } else if let Ok(dt) = $row.try_get::<chrono::NaiveDateTime, _>(i) {
+                        Value::String(dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                    } else if let Ok(dt) = $row.try_get::<chrono::NaiveDate, _>(i) {
+                        Value::String(dt.to_string())
+                    } else if let Ok(t) = $row.try_get::<chrono::NaiveTime, _>(i) {
+                        Value::String(t.to_string())
+                    } else {
+                        if let Ok(s) = $row.try_get::<String, _>(i) { Value::String(s) } else { Value::String("Invalid Date".to_string()) }
+                    }
+                } else if type_name.contains("blob") || type_name.contains("binary") {
+                    if let Ok(bytes) = $row.try_get::<Vec<u8>, _>(i) {
+                        let hex_string: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+                        if bytes.len() == 16 {
+                            if let Ok(u) = uuid::Uuid::from_slice(&bytes) {
+                                Value::String(u.to_string())
+                            } else {
+                                Value::String(format!("0x{}", hex_string))
+                            }
+                        } else {
+                            Value::String(format!("0x{}", hex_string))
+                        }
+                    } else {
+                        Value::String(format!("BinaryErr({})", type_name))
+                    }
+                } else {
+                    if let Ok(s) = $row.try_get::<String, _>(i) {
+                        Value::String(s)
+                    } else {
+                        Value::String(format!("Binary/Complex ({})", type_name))
+                    }
+                }
+            };
+            result_row.push(val);
+        }
+        result_row
+    }};
+}
+
+macro_rules! sqlite_row_to_values {
+    ($row:expr) => {{
+        let mut result_row = Vec::new();
+        for i in 0..$row.columns().len() {
+            let val: Value = if $row.try_get_raw(i).map(|v| v.is_null()).unwrap_or(true) {
+                Value::Null
+            } else {
+                let type_name = $row.column(i).type_info().name().to_lowercase();
+                if type_name == "bool" || type_name == "boolean" {
+                    if let Ok(b) = $row.try_get::<bool, _>(i) { Value::Bool(b) }
+                    else { Value::Null }
+                } else if type_name.contains("int") || type_name == "integer" {
+                    if let Ok(n) = $row.try_get::<i64, _>(i) { 
+                        Value::Number(serde_json::Number::from(n)) 
+                    } else if let Ok(n) = $row.try_get::<i32, _>(i) {
+                        Value::Number(serde_json::Number::from(n))
+                    } else if let Ok(n) = $row.try_get::<i16, _>(i) {
+                        Value::Number(serde_json::Number::from(n))
+                    } else if let Ok(n) = $row.try_get::<i8, _>(i) {
+                        Value::Number(serde_json::Number::from(n))
+                    } else {
+                        Value::String(format!("NumError({})", type_name))
+                    }
+                } else if type_name.contains("float") || type_name == "real" || type_name == "double" {
+                    if let Ok(f) = $row.try_get::<f64, _>(i) {
+                        serde_json::Number::from_f64(f).map(Value::Number).unwrap_or(Value::Null)
+                    } else { Value::Null }
+                } else if type_name_is_text(&type_name) {
+                    if let Ok(s) = $row.try_get::<String, _>(i) { Value::String(s) } else { Value::String("".to_string()) }
+                } else if type_name.contains("blob") {
+                    if let Ok(bytes) = $row.try_get::<Vec<u8>, _>(i) {
+                        let hex_string: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+                        Value::String(format!("0x{}", hex_string))
+                    } else {
+                        Value::String("Blob Error".to_string())
+                    }
+                } else {
+                    if let Ok(s) = $row.try_get::<String, _>(i) {
+                        Value::String(s)
+                    } else {
+                        Value::String(format!("Binary/Complex ({})", type_name))
+                    }
+                }
+            };
+            result_row.push(val);
+        }
+        result_row
+    }};
 }
 
 fn build_where_clause(filters: Vec<FilterConfig>, db_type: &str) -> String {
@@ -337,22 +300,140 @@ fn build_order_clause(sort_column: Option<String>, sort_direction: Option<String
 pub struct QueryEngine;
 
 impl QueryEngine {
+    pub async fn execute_query_streaming(
+        manager: &ConnectionManager,
+        connection_id: &Uuid,
+        sql: &str,
+        query_id: Uuid,
+        window: &tauri::Window,
+        token: CancellationToken,
+    ) -> Result<()> {
+        let start = Instant::now();
+        use futures::StreamExt;
+        
+                macro_rules! stream_db {
+                    ($pool:expr, $db_macro:ident) => {{
+                        let mut stream = sqlx::query(sql).fetch($pool);
+                        let mut columns_sent = false;
+                        let mut batch = Vec::new();
+                        let mut total_rows = 0u64;
+                        let batch_size = 1000;
+
+                        while let Some(row_result) = stream.next().await {
+                            if token.is_cancelled() {
+                                return Ok(());
+                            }
+
+                            let row = row_result?;
+                            
+                            if !columns_sent {
+                                let columns = row.columns().iter().map(|c| c.name().to_string()).collect();
+                                window.emit("query-metadata", StreamingMetadata { query_id, columns })?;
+                                columns_sent = true;
+                            }
+
+                            batch.push($db_macro!(&row));
+                            total_rows += 1;
+
+                            if batch.len() >= batch_size {
+                                window.emit("query-batch", StreamingBatch { query_id, rows: batch.clone() })?;
+                                batch.clear();
+                                // Yield to allow the frontend and the event loop to breathe
+                                sleep(Duration::from_millis(5)).await;
+                            }
+                        }
+
+                        if !batch.is_empty() {
+                            window.emit("query-batch", StreamingBatch { query_id, rows: batch })?;
+                        }
+
+                        window.emit("query-complete", StreamingComplete {
+                            query_id,
+                            execution_time_ms: start.elapsed().as_millis() as u64,
+                            total_rows,
+                        })?;
+
+                        return Ok(());
+                    }};
+                }
+
+                // Check Postgres
+                {
+                    let pools = manager.get_postgres_pools().await;
+                    if let Some(pool) = pools.get(connection_id) {
+                        stream_db!(pool, postgres_row_to_values);
+                    }
+                }
+
+                // Check MySQL
+                {
+                    let pools = manager.get_mysql_pools().await;
+                    if let Some(pool) = pools.get(connection_id) {
+                        stream_db!(pool, mysql_row_to_values);
+                    }
+                }
+
+                // Check SQLite
+                {
+                    let pools = manager.get_sqlite_pools().await;
+                    if let Some(pool) = pools.get(connection_id) {
+                        stream_db!(pool, sqlite_row_to_values);
+                    }
+                }
+
+        Err(anyhow!("Connection not found"))
+    }
+
     pub async fn execute_query(
         manager: &ConnectionManager,
         connection_id: &Uuid,
         sql: &str,
+        page: Option<u32>,
+        page_size: Option<u32>,
     ) -> Result<QueryResult> {
         let start = Instant::now();
+        let mut total_count = None;
+        let mut final_sql = sql.to_string();
+
+        if let (Some(p), Some(ps)) = (page, page_size) {
+            if ps > 0 {
+                final_sql = wrap_pagination(sql, ps, p * ps);
+            }
+        }
 
         // Check Postgres
         {
             let pools = manager.get_postgres_pools().await;
-
             if let Some(pool) = pools.get(connection_id) {
+                // Get count if requested
+                if page.is_some() {
+                    let c_sql = wrap_count(sql);
+                    if !c_sql.is_empty() {
+                        if let Ok(count_row) = sqlx::query(&c_sql).fetch_one(pool).await {
+                            total_count = Some(count_row.get::<i64, _>(0) as u64);
+                        }
+                    }
+                }
 
-                let rows = sqlx::query(sql).fetch_all(pool).await?;
+                let rows = sqlx::query(&final_sql).fetch_all(pool).await?;
+                let mut result_rows = Vec::new();
+                let mut columns = Vec::new();
+                if let Some(first) = rows.first() {
+                    columns = first.columns().iter().map(|c| c.name().to_string()).collect();
+                }
+                for row in rows {
+                    result_rows.push(postgres_row_to_values!(&row));
+                }
 
-                return map_rows!(rows, start.elapsed().as_millis() as u64, Postgres);
+                return Ok(QueryResult {
+                    columns,
+                    rows: result_rows,
+                    affected_rows: 0,
+                    execution_time_ms: start.elapsed().as_millis() as u64,
+                    total_count,
+                    page,
+                    page_size,
+                });
             }
         }
 
@@ -360,8 +441,34 @@ impl QueryEngine {
         {
             let pools = manager.get_mysql_pools().await;
             if let Some(pool) = pools.get(connection_id) {
-                let rows = sqlx::query(sql).fetch_all(pool).await?;
-                return map_rows!(rows, start.elapsed().as_millis() as u64, MySql);
+                if page.is_some() {
+                    let c_sql = wrap_count(sql);
+                    if !c_sql.is_empty() {
+                        if let Ok(count_row) = sqlx::query(&c_sql).fetch_one(pool).await {
+                            total_count = Some(count_row.get::<i64, _>(0) as u64);
+                        }
+                    }
+                }
+
+                let rows = sqlx::query(&final_sql).fetch_all(pool).await?;
+                let mut result_rows = Vec::new();
+                let mut columns = Vec::new();
+                if let Some(first) = rows.first() {
+                    columns = first.columns().iter().map(|c| c.name().to_string()).collect();
+                }
+                for row in rows {
+                    result_rows.push(mysql_row_to_values!(&row));
+                }
+
+                return Ok(QueryResult {
+                    columns,
+                    rows: result_rows,
+                    affected_rows: 0,
+                    execution_time_ms: start.elapsed().as_millis() as u64,
+                    total_count,
+                    page,
+                    page_size,
+                });
             }
         }
 
@@ -369,21 +476,38 @@ impl QueryEngine {
         {
             let pools = manager.get_sqlite_pools().await;
             if let Some(pool) = pools.get(connection_id) {
-                let rows = sqlx::query(sql).fetch_all(pool).await?;
-                return map_rows!(rows, start.elapsed().as_millis() as u64, Sqlite);
+                if page.is_some() {
+                    let c_sql = wrap_count(sql);
+                    if !c_sql.is_empty() {
+                        if let Ok(count_row) = sqlx::query(&c_sql).fetch_one(pool).await {
+                            total_count = Some(count_row.get::<i64, _>(0) as u64);
+                        }
+                    }
+                }
+
+                let rows = sqlx::query(&final_sql).fetch_all(pool).await?;
+                let mut result_rows = Vec::new();
+                let mut columns = Vec::new();
+                if let Some(first) = rows.first() {
+                    columns = first.columns().iter().map(|c| c.name().to_string()).collect();
+                }
+                for row in rows {
+                    result_rows.push(sqlite_row_to_values!(&row));
+                }
+
+                return Ok(QueryResult {
+                    columns,
+                    rows: result_rows,
+                    affected_rows: 0,
+                    execution_time_ms: start.elapsed().as_millis() as u64,
+                    total_count,
+                    page,
+                    page_size,
+                });
             }
         }
 
         Err(anyhow!("Connection not found"))
-    }
-
-    // Kept for backward compat if needed, but redundant now
-    pub async fn execute_query_sqlite(
-         manager: &ConnectionManager,
-         connection_id: &Uuid,
-         sql: &str,
-    ) -> Result<QueryResult> {
-        Self::execute_query(manager, connection_id, sql).await
     }
 
     pub async fn create_database(
@@ -541,19 +665,19 @@ impl QueryEngine {
                  let where_clause = build_where_clause(filters, "postgres");
                  let order_clause = build_order_clause(sort_column, sort_direction, "postgres");
                  let sql = format!("SELECT * FROM \"{}\" {} {} LIMIT {} OFFSET {};", table_name.replace("\"", "\"\""), where_clause, order_clause, limit, offset);
-                 Self::execute_query(manager, connection_id, &sql).await
+                 Self::execute_query(manager, connection_id, &sql, None, None).await
             },
             Some("mysql") => {
                  let where_clause = build_where_clause(filters, "mysql");
                  let order_clause = build_order_clause(sort_column, sort_direction, "mysql");
                  let sql = format!("SELECT * FROM `{}` {} {} LIMIT {} OFFSET {};", table_name.replace("`", "``"), where_clause, order_clause, limit, offset);
-                 Self::execute_query(manager, connection_id, &sql).await
+                 Self::execute_query(manager, connection_id, &sql, None, None).await
             },
             Some("sqlite") => {
                  let where_clause = build_where_clause(filters, "sqlite");
                  let order_clause = build_order_clause(sort_column, sort_direction, "sqlite");
                  let sql = format!("SELECT * FROM \"{}\" {} {} LIMIT {} OFFSET {};", table_name.replace("\"", "\"\""), where_clause, order_clause, limit, offset);
-                 Self::execute_query(manager, connection_id, &sql).await
+                 Self::execute_query(manager, connection_id, &sql, None, None).await
             },
             Some(_) => Err(anyhow!("Unknown database type")),
             None => Err(anyhow!("Connection not found"))
@@ -960,7 +1084,7 @@ impl QueryEngine {
             _ => return Err(anyhow!("Unknown database type")),
         };
 
-        let result = Self::execute_query(manager, connection_id, &sql).await?;
+        let result = Self::execute_query(manager, connection_id, &sql, None, None).await?;
         let rows_count = result.rows.len() as u64;
 
         let mut file = File::create(file_path)?;

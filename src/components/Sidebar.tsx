@@ -20,7 +20,7 @@ export const Sidebar = () => {
 
   return (
     <>
-      <div className="w-64 bg-sidebar border-r border-border flex flex-col h-full select-none">
+      <div className="w-full bg-sidebar border-r border-border flex flex-col h-full select-none">
         {activeConnectionId ? (
           <div className="flex flex-col border-b border-border bg-[#2C2C2C]">
             <div className="flex items-center px-3 pt-4 pb-2 gap-0.5">

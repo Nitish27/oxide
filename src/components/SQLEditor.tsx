@@ -3,10 +3,12 @@ import Editor from '@monaco-editor/react';
 interface SQLEditorProps {
   value: string;
   onChange: (value: string | undefined) => void;
-  onRun?: () => void;
+  onRun?: (selectedText?: string) => void;
+  onRunAll?: () => void;
+  onCancel?: () => void;
 }
 
-export const SQLEditor = ({ value, onChange, onRun }: SQLEditorProps) => {
+export const SQLEditor = ({ value, onChange, onRun, onRunAll, onCancel }: SQLEditorProps) => {
   return (
     <div className="h-full w-full">
       <Editor
@@ -26,8 +28,22 @@ export const SQLEditor = ({ value, onChange, onRun }: SQLEditorProps) => {
           wordWrap: 'on',
         }}
         onMount={(editor, monaco) => {
+          // ⌘+Return or Ctrl+Return: Run Current/Selected
           editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
-            onRun?.();
+            const selection = editor.getSelection();
+            const selectedText = selection ? editor.getModel()?.getValueInRange(selection) : undefined;
+            onRun?.(selectedText);
+          });
+
+          // ⌘+⇧+Return or Ctrl+Shift+Return: Run All
+          editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter, () => {
+            onRunAll?.();
+          });
+
+          // ⌘+. or Ctrl+.: Cancel Query
+          // Note: monaco.KeyCode.Period is used for '.'
+          editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Period, () => {
+            onCancel?.();
           });
         }}
       />
