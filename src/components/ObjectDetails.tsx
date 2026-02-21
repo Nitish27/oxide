@@ -46,20 +46,16 @@ export const ObjectDetails = () => {
     }
   }, [activeTab?.tableName, activeTab?.selectedRowIndex, connectionId, activeTab?.type]);
 
-  // If not a table tab, return null. This is the safest way to clear the right panel.
-  if (!activeTab || activeTab.type !== 'table') {
-    return null;
-  }
 
-  const isRowSelected = Boolean(activeTab.selectedRowIndex !== null && activeTab.selectedRowIndex !== undefined);
+  const isRowSelected = Boolean(activeTab?.selectedRowIndex !== null && activeTab?.selectedRowIndex !== undefined);
   
   // Safe row access
-  const currentRow = (isRowSelected && activeTab.rows && activeTab.selectedRowIndex !== undefined && activeTab.selectedRowIndex !== null && activeTab.selectedRowIndex < activeTab.rows.length) 
+  const currentRow = (isRowSelected && activeTab?.rows && activeTab?.selectedRowIndex !== undefined && activeTab?.selectedRowIndex !== null && activeTab.selectedRowIndex < activeTab.rows.length) 
     ? activeTab.rows[activeTab.selectedRowIndex] 
     : null;
   
   const fields = useMemo(() => {
-    if (isRowSelected && activeTab.columns) {
+    if (isRowSelected && activeTab?.columns) {
       return activeTab.columns.map((name, i) => ({ 
         name, 
         value: currentRow ? currentRow[i] : undefined,
@@ -73,12 +69,18 @@ export const ObjectDetails = () => {
         { name: 'comment', value: metadata?.comment || 'NULL', originalIndex: 3 },
       ];
     }
-  }, [isRowSelected, activeTab.columns, currentRow, metadata]);
+  }, [isRowSelected, activeTab?.columns, currentRow, metadata]);
 
   const filteredFields = fields.filter(f => 
     f.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
     String(f.value || '').toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  // If not a table tab, return null. This is the safest way to clear the right panel.
+  // We do this AFTER all hooks have been called to comply with React rules.
+  if (!activeTab || activeTab.type !== 'table') {
+    return null;
+  }
 
   return (
     <div className="flex-1 flex flex-col bg-[#262626] border-l border-[#1e1e1e] w-full overflow-hidden">
