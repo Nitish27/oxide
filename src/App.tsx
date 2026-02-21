@@ -9,6 +9,8 @@ import { WelcomeScreen } from "./components/WelcomeScreen";
 import { ConnectionModal } from "./components/ConnectionModal";
 import { DatabaseSelectorModal } from "./components/DatabaseSelectorModal";
 import { ObjectDetails } from "./components/ObjectDetails";
+import { ImportDialog } from "./components/ImportDialog";
+import { ExportDialog } from "./components/ExportDialog";
 import { useEffect } from "react";
 import { Group, Panel, Separator } from 'react-resizable-panels';
 
@@ -193,6 +195,8 @@ function App() {
 
       <ConnectionModal open={showConnectionModal} onOpenChange={setShowConnectionModal} />
       <DatabaseSelectorModal />
+      <ImportDialog />
+      <ExportDialog />
     </div>
   );
 }
