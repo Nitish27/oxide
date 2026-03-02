@@ -66,7 +66,7 @@ impl ConnectionManager {
         let mut tunnel_opt: Option<Arc<SshTunnel>> = None;
 
         if config.ssh_enabled {
-            let tunnel = self.establish_ssh_tunnel(&config).await?;
+            let tunnel = Self::establish_ssh_tunnel_static(&config).await?;
             final_config.host = Some("127.0.0.1".to_string());
             final_config.port = Some(tunnel.local_port);
             tunnel_opt = Some(tunnel);
@@ -132,7 +132,7 @@ impl ConnectionManager {
         Ok(())
     }
 
-    async fn establish_ssh_tunnel(&self, config: &ConnectionConfig) -> Result<Arc<SshTunnel>> {
+    pub async fn establish_ssh_tunnel_static(config: &ConnectionConfig) -> Result<Arc<SshTunnel>> {
         let ssh_host = config.ssh_host.as_ref().ok_or_else(|| anyhow!("SSH host missing"))?;
         let ssh_port = config.ssh_port.unwrap_or(22);
         let ssh_user = config.ssh_username.as_ref().ok_or_else(|| anyhow!("SSH username missing"))?;
@@ -310,7 +310,7 @@ impl ConnectionManager {
         let mut final_config = config.clone();
         
         if config.ssh_enabled {
-            let tunnel = self.establish_ssh_tunnel(&config).await?;
+            let tunnel = Self::establish_ssh_tunnel_static(&config).await?;
             final_config.host = Some("127.0.0.1".to_string());
             final_config.port = Some(tunnel.local_port);
             
@@ -368,7 +368,7 @@ impl ConnectionManager {
         let mut final_config = config.clone();
         
         if config.ssh_enabled {
-            let tunnel = self.establish_ssh_tunnel(&config).await?;
+            let tunnel = Self::establish_ssh_tunnel_static(&config).await?;
             final_config.host = Some("127.0.0.1".to_string());
             final_config.port = Some(tunnel.local_port);
             

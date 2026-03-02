@@ -1,4 +1,5 @@
 pub mod core;
+pub mod drivers;
 pub mod db;
 pub mod security;
 pub mod utils;
