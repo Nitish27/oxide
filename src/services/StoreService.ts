@@ -15,9 +15,9 @@ export class StoreService {
   private settingsStore: Store | null = null;
 
   async init(): Promise<void> {
-    this.connectionsStore = await load('connections.json', { autoSave: true });
-    this.historyStore = await load('history.json', { autoSave: true });
-    this.settingsStore = await load('settings.json', { autoSave: true });
+    this.connectionsStore = await load('connections.json', { autoSave: true, defaults: {} });
+    this.historyStore = await load('history.json', { autoSave: true, defaults: {} });
+    this.settingsStore = await load('settings.json', { autoSave: true, defaults: {} });
     await this.migrateFromLocalStorage();
   }
 
@@ -89,7 +89,7 @@ export class StoreService {
 
   // Settings methods (for Phase 2+ use)
   async getSetting<T>(key: string): Promise<T | null> {
-    return await this.settingsStore!.get<T>(key);
+    return (await this.settingsStore!.get<T>(key)) ?? null;
   }
 
   async setSetting(key: string, value: any): Promise<void> {

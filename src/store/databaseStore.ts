@@ -1,6 +1,11 @@
+// PERSISTENCE: All persistent data uses StoreService (tauri-plugin-store).
+// DO NOT use localStorage -- it will be wiped on Tauri URL scheme changes.
+// See: .planning/phases/01-security-foundation-repair/01-RESEARCH.md
+
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { v4 as uuidv4 } from 'uuid';
+import { storeService } from '../services/StoreService';
 
 export type TabType = 'table' | 'query' | 'structure';
 
@@ -124,30 +129,35 @@ export interface SavedConnection {
   color: string;
 }
 
-// Helper to persist connections to localStorage
-const saveConnectionsToStorage = (connections: SavedConnection[]) => {
-  localStorage.setItem('sqlmate_saved_connections', JSON.stringify(connections));
+// Async helper to persist connections via StoreService
+const saveConnectionsToStore = async (connections: SavedConnection[]) => {
+  await storeService.setConnections(connections);
 };
 
-// Helper to load connections from localStorage
-const loadConnectionsFromStorage = (): SavedConnection[] => {
+// Async helper to load connections via StoreService
+const loadConnectionsFromStore = async (): Promise<SavedConnection[]> => {
   try {
-    const saved = localStorage.getItem('sqlmate_saved_connections') || localStorage.getItem('oxide_saved_connections');
-    return saved ? JSON.parse(saved) : [];
+    return await storeService.getConnections();
   } catch (e) {
     console.error('Failed to load connections:', e);
     return [];
   }
 };
 
-const loadHistoryFromStorage = (): HistoryItem[] => {
+const loadHistoryFromStore = async (): Promise<HistoryItem[]> => {
   try {
-    const saved = localStorage.getItem('sqlmate_query_history') || localStorage.getItem('oxide_query_history');
-    return saved ? JSON.parse(saved) : [];
+    return await storeService.getHistory();
   } catch (e) {
     console.error('Failed to load history:', e);
     return [];
   }
+};
+
+// Initialize store data from StoreService (called after storeService.init())
+export const initDatabaseStoreData = async () => {
+  const connections = await loadConnectionsFromStore();
+  const history = await loadHistoryFromStore();
+  useDatabaseStore.setState({ savedConnections: connections, queryHistory: history });
 };
 
 interface DatabaseState {
@@ -267,7 +277,7 @@ export const useDatabaseStore = create<DatabaseState>((set, get) => ({
   activeTable: null,
   activeDatabases: {},
   activeTables: {},
-  savedConnections: loadConnectionsFromStorage(),
+  savedConnections: [],
   sidebarItems: {},
   sidebarSettings: {},
   pinnedItems: {},
@@ -277,7 +287,7 @@ export const useDatabaseStore = create<DatabaseState>((set, get) => ({
   tabs: [],
   activeTabId: null,
   activeTabIds: {},
-  queryHistory: loadHistoryFromStorage(),
+  queryHistory: [],
   refreshTrigger: 0,
   showConnectionModal: false,
   showDatabaseSelector: false,
@@ -315,18 +325,18 @@ export const useDatabaseStore = create<DatabaseState>((set, get) => ({
   setShowExportDialog: (show) => set({ showExportDialog: show }),
   setSidebarViewMode: (mode) => set({ sidebarViewMode: mode }),
 
-  addToHistory: (item) => set((state) => {
+  addToHistory: (item) => {
     const newItem: HistoryItem = {
       ...item,
       id: Math.random().toString(36).substring(7),
       timestamp: Date.now()
     };
-    const newHistory = [newItem, ...state.queryHistory].slice(0, 100);
-    localStorage.setItem('sqlmate_query_history', JSON.stringify(newHistory));
-    return {
-      queryHistory: newHistory
-    };
-  }),
+    const newHistory = [newItem, ...get().queryHistory].slice(0, 100);
+    storeService.setHistory(newHistory).catch((e) =>
+      console.error('Failed to save history:', e)
+    );
+    set({ queryHistory: newHistory });
+  },
 
   setActiveConnection: (id) => set((state) => {
     const conn = state.savedConnections.find(c => c.id === id);
@@ -546,25 +556,31 @@ export const useDatabaseStore = create<DatabaseState>((set, get) => ({
       activeTables: newActiveTables
     };
   }),
-  addConnection: (conn) => set((state) => {
-    const newConnections = [...state.savedConnections, conn];
-    saveConnectionsToStorage(newConnections);
-    return { savedConnections: newConnections };
-  }),
+  addConnection: (conn) => {
+    const newConnections = [...get().savedConnections, conn];
+    saveConnectionsToStore(newConnections).catch((e) =>
+      console.error('Failed to save connections:', e)
+    );
+    set({ savedConnections: newConnections });
+  },
 
-  updateConnection: (id, updates) => set((state) => {
-    const newConnections = state.savedConnections.map(c =>
+  updateConnection: (id, updates) => {
+    const newConnections = get().savedConnections.map(c =>
       c.id === id ? { ...c, ...updates } : c
     );
-    saveConnectionsToStorage(newConnections);
-    return { savedConnections: newConnections };
-  }),
+    saveConnectionsToStore(newConnections).catch((e) =>
+      console.error('Failed to save connections:', e)
+    );
+    set({ savedConnections: newConnections });
+  },
 
-  removeConnection: (id) => set((state) => {
-    const newConnections = state.savedConnections.filter(c => c.id !== id);
-    saveConnectionsToStorage(newConnections);
-    return { savedConnections: newConnections };
-  }),
+  removeConnection: (id) => {
+    const newConnections = get().savedConnections.filter(c => c.id !== id);
+    saveConnectionsToStore(newConnections).catch((e) =>
+      console.error('Failed to save connections:', e)
+    );
+    set({ savedConnections: newConnections });
+  },
 
   openTab: (tabData) => set((state) => {
     // If it's a table tab and already open, just switch to it
