@@ -74,37 +74,50 @@ impl ConnectionManager {
 
         let result = match final_config.db_type {
             DatabaseType::Postgres => {
-                let host = final_config.host.clone().ok_or_else(|| anyhow!("Host required for Postgres"))?;
+                let host = final_config.host.as_deref().ok_or_else(|| anyhow!("Host required for Postgres"))?;
                 let port = final_config.port.unwrap_or(5432);
-                let user = final_config.username.clone().ok_or_else(|| anyhow!("Username required for Postgres"))?;
-                let db = final_config.database.clone().ok_or_else(|| anyhow!("Database name required for Postgres"))?;
+                let user = final_config.username.as_deref().ok_or_else(|| anyhow!("Username required for Postgres"))?;
+                let db = final_config.database.as_deref().ok_or_else(|| anyhow!("Database name required for Postgres"))?;
                 let pass = password.unwrap_or_default();
-                let url = format!("postgres://{}:{}@{}:{}/{}", user, pass, host, port, db);
-                
+
+                let opts = PgConnectOptions::new()
+                    .host(host)
+                    .port(port)
+                    .username(user)
+                    .password(&pass)
+                    .database(db);
+
                 async {
-                    let mut conn = sqlx::postgres::PgConnection::connect(&url).await?;
+                    let mut conn = sqlx::postgres::PgConnection::connect_with(&opts).await?;
                     conn.ping().await
                 }.await.map_err(|e| anyhow!("Connection/Ping failed: {}", e))
             },
             DatabaseType::MySql => {
-                let host = final_config.host.clone().ok_or_else(|| anyhow!("Host required for MySQL"))?;
+                let host = final_config.host.as_deref().ok_or_else(|| anyhow!("Host required for MySQL"))?;
                 let port = final_config.port.unwrap_or(3306);
-                let user = final_config.username.clone().ok_or_else(|| anyhow!("Username required for MySQL"))?;
-                let db = final_config.database.clone().ok_or_else(|| anyhow!("Database name required for MySQL"))?;
+                let user = final_config.username.as_deref().ok_or_else(|| anyhow!("Username required for MySQL"))?;
+                let db = final_config.database.as_deref().ok_or_else(|| anyhow!("Database name required for MySQL"))?;
                 let pass = password.unwrap_or_default();
-                let url = format!("mysql://{}:{}@{}:{}/{}", user, pass, host, port, db);
-                
+
+                let opts = MySqlConnectOptions::new()
+                    .host(host)
+                    .port(port)
+                    .username(user)
+                    .password(&pass)
+                    .database(db);
+
                 async {
-                    let mut conn = sqlx::mysql::MySqlConnection::connect(&url).await?;
+                    let mut conn = sqlx::mysql::MySqlConnection::connect_with(&opts).await?;
                     conn.ping().await
                 }.await.map_err(|e| anyhow!("Connection/Ping failed: {}", e))
             },
             DatabaseType::Sqlite => {
                 let db_path = final_config.database.clone().ok_or_else(|| anyhow!("Path required for SQLite"))?;
-                let url = format!("sqlite:{}", db_path);
-                
+                let opts = sqlx::sqlite::SqliteConnectOptions::new()
+                    .filename(&db_path);
+
                 async {
-                    let mut conn = sqlx::sqlite::SqliteConnection::connect(&url).await?;
+                    let mut conn = sqlx::sqlite::SqliteConnection::connect_with(&opts).await?;
                     conn.ping().await
                 }.await.map_err(|e| anyhow!("Connection/Ping failed: {}", e))
             },
