@@ -31,7 +31,7 @@
 - [ ] All existing features (query execution, data editing, filtering) function through new store architecture
 - [ ] No passwords visible in connection URLs or shell commands
 
-**Plans:** 4 plans
+**Plans:** 3/4 plans executed
 
 Plans:
 - [ ] 01-01-PLAN.md — sqlx 0.8 upgrade, test_connection fix, cargo audit CI
