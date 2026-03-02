@@ -45,8 +45,11 @@ Phase 1: Security & Foundation Repair — IN PROGRESS (Plan 1/4 complete)
 | 01-01 | 3min | 2 | 4 |
 
 ## Last Session
-- **Stopped at:** Completed 01-01-PLAN.md
-- **Timestamp:** 2026-03-02T03:54:06Z
+- **Stopped at:** Wave 2 in progress — 01-02 (DriverRegistry) and 01-03 (store migration) need re-execution
+- **Resume from:** Wave 2 — re-run both 01-02 and 01-03, then 01-04 (Wave 3)
+- **Branch:** feature/phase-1-foundation-repair
+- **Uncommitted changes:** 01-03 partial work in package.json, Cargo.toml, lib.rs (may need reset)
+- **Timestamp:** 2026-03-02T04:10:00Z
 
 ---
 
