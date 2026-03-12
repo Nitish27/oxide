@@ -1,5 +1,7 @@
 <p align="center">
-  <img src="assets/sqlmate-logo.svg" width="300" alt="SqlMate Logo" />
+  <a href="https://sqlmate.io">
+    <img src="assets/sqlmate-logo.svg" width="300" alt="SqlMate Logo" />
+  </a>
 </p>
 
 ## Screenshots
